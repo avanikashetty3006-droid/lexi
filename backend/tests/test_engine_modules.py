@@ -262,3 +262,63 @@ def test_threshold_reuse_cache_recomputes_clarification_without_extra_llm_calls(
     assert res_high.clarification_question == "Did she bend down or own a bird?"
     clear_analyze_cache()
 
+
+def test_conversational_greeting_no_clarification_while_monitoring_ambiguity(monkeypatch):
+    from app.engine.pipeline import clear_analyze_cache
+
+    clear_analyze_cache()
+
+    class ChatClient:
+        async def call_json(self, *, user_prompt: str, schema_model=None, **kwargs):
+            payload = json.loads(user_prompt)
+            if payload["sentence"].lower().startswith("hi"):
+                return RawDetectionResult(
+                    ambiguous=False,
+                    ambiguities=[],
+                    interpretations=[
+                        RawInterpretationItem(id="i1", meaning="Hi there! How can I help you today?")
+                    ],
+                    clarification_question=None,
+                    options=[],
+                )
+            if "choice" in getattr(schema_model, "model_fields", {}):
+                return schema_model.model_validate({"choice": "unclear", "reason": "ambiguous"})
+            return RawDetectionResult(
+                ambiguous=True,
+                ambiguities=[
+                    {"type": "lexical", "span": "match", "explanation": "Sports match or fire matchstick."}
+                ],
+                interpretations=[
+                    RawInterpretationItem(id="i1", meaning="Tell me about the sports match."),
+                    RawInterpretationItem(id="i2", meaning="Tell me about the fire matchstick."),
+                ],
+                clarification_question="Did you mean a sports match or a matchstick?",
+                options=["Sports match", "Matchstick"],
+            )
+
+    greet = asyncio.run(
+        analyze_sentence(
+            AnalyzeRequest(sentence="Hi, how are you?"),
+            llm_client=ChatClient(),
+            embed_fn=_orthogonal_embed,
+            enable_logging=False,
+        )
+    )
+    assert greet.ambiguous is False
+    assert greet.needs_clarification is False
+    assert greet.clarification_question is None
+    assert "help" in greet.interpretations[0].meaning.lower()
+
+    ambig = asyncio.run(
+        analyze_sentence(
+            AnalyzeRequest(sentence="Tell me about the match."),
+            llm_client=ChatClient(),
+            embed_fn=_orthogonal_embed,
+            enable_logging=False,
+        )
+    )
+    assert ambig.ambiguous is True
+    assert ambig.needs_clarification is True
+    assert ambig.clarification_question is not None
+
+
