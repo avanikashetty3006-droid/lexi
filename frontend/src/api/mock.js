@@ -312,7 +312,48 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const CLEAN_CHITCHAT = new Set([
+  'hi',
+  'hello',
+  'hey',
+  'yo',
+  'good morning',
+  'good afternoon',
+  'good evening',
+  'thanks',
+  'thank you',
+  'thx',
+  'ok',
+  'okay',
+  'yes',
+  'no',
+  'bye',
+  'goodbye',
+  'how are you',
+]);
+
+function buildCleanMock(sentence, meaning) {
+  return {
+    ambiguous: false,
+    confidence: 1.0,
+    ambiguities: [],
+    interpretations: [{ id: 'i1', meaning, probability: 1.0 }],
+    uncertainty: { vote_split: { i1: 1.0 }, semantic_entropy: 0.0 },
+    semantic_map: [{ id: 'i1', x: 0.0, y: 0.0, label: 'Clear meaning' }],
+    clarification_question: null,
+    options: [],
+    baseline: { ambiguous: false, chosen_meaning: meaning },
+  };
+}
+
 function buildGenericMock(sentence, domain) {
+  const normalized = sentence.trim().toLowerCase().replace(/[.!?]+$/, '');
+  if (CLEAN_CHITCHAT.has(normalized)) {
+    return buildCleanMock(
+      sentence,
+      'Casual greeting or conversational acknowledgement.'
+    );
+  }
   const words = sentence.trim().split(/\s+/);
   const target = words[words.length - 1]?.replace(/[.,!?]+$/, '') || sentence;
   const start = Math.max(0, sentence.lastIndexOf(target));
