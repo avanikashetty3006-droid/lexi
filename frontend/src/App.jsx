@@ -1,12 +1,15 @@
 import { useState } from 'react';
+import { useAuth } from './state/auth';
 import { useConversation } from './state/conversation';
+import LoginPage from './components/LoginPage';
 import Header from './components/Header';
 import ChatColumn from './components/ChatColumn';
 import AnalysisPanel from './components/AnalysisPanel';
 import CompareView from './components/CompareView';
 import AboutModal from './components/AboutModal';
 
-export default function App() {
+function MainApp() {
+  const { user, signOut } = useAuth();
   const conv = useConversation();
   const [aboutOpen, setAboutOpen] = useState(false);
 
@@ -21,6 +24,8 @@ export default function App() {
         onToggleCompare={conv.toggleCompareMode}
         onOpenAbout={() => setAboutOpen(true)}
         onNewConversation={conv.clearConversation}
+        user={user}
+        onSignOut={signOut}
       />
 
       <main className="flex-1 p-4 grid grid-cols-1 lg:grid-cols-2 gap-4 max-w-7xl w-full mx-auto">
@@ -64,4 +69,11 @@ export default function App() {
       <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} />
     </div>
   );
+}
+
+export default function App() {
+  const { user } = useAuth();
+  const required = import.meta.env.VITE_AUTH_REQUIRED === 'true';
+  if (required && !user) return <LoginPage />;
+  return <MainApp />;
 }
