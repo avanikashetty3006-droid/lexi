@@ -491,5 +491,104 @@ def test_incremental_stream_tokens_clean_response(monkeypatch, tmp_path):
     assert res.text.count("How can I help?") == 4  # 1 token + 1 detected + 2 in done (interp + map)
 
 
+def test_build_completion_kwargs_groq_reasoning_vs_llama():
+    from app.engine.llm import build_completion_kwargs
+
+    oss_kwargs = build_completion_kwargs(
+        model="openai/gpt-oss-20b",
+        provider="groq",
+        system_prompt="sys",
+        user_prompt="usr",
+        temperature=0.7,
+        max_tokens=80,
+        seed=42,
+    )
+    assert oss_kwargs["reasoning_effort"] == "low"
+    assert oss_kwargs["max_tokens"] >= 1024
+
+    llama_kwargs = build_completion_kwargs(
+        model="llama-3.3-70b-versatile",
+        provider="groq",
+        system_prompt="sys",
+        user_prompt="usr",
+        temperature=0.7,
+        max_tokens=80,
+        seed=42,
+    )
+    assert "reasoning_effort" not in llama_kwargs
+    assert llama_kwargs["max_tokens"] == 80
+
+    gemini_kwargs = build_completion_kwargs(
+        model="gemini-3.1-flash-lite",
+        provider="gemini",
+        system_prompt="sys",
+        user_prompt="usr",
+        temperature=0.0,
+        max_tokens=600,
+        seed=42,
+    )
+    assert gemini_kwargs["reasoning_effort"] == "minimal"
+    assert gemini_kwargs["max_tokens"] == 600
 
 
+def test_call_json_gemini_rate_limit_fallback_to_groq_reasoning():
+    import httpx
+    from openai import RateLimitError
+    from app.engine.llm import LLMClient
+
+    captured_backup_kwargs: list[dict] = []
+
+    class FailingPrimaryCompletions:
+        async def create(self, **kwargs):
+            req = httpx.Request("POST", "https://example.com/v1/chat/completions")
+            resp = httpx.Response(429, request=req)
+            raise RateLimitError("rate limited", response=resp, body=None)
+
+    class SucceedingBackupCompletions:
+        async def create(self, **kwargs):
+            captured_backup_kwargs.append(kwargs)
+            msg = type("Msg", (), {"content": '{"ambiguous": false}'})()
+            choice = type("Choice", (), {"message": msg})()
+            return type("Resp", (), {"choices": [choice]})()
+
+    fake_cfg = type(
+        "FakeCfg",
+        (),
+        {
+            "llm_provider": "gemini",
+            "model_name": "gemini-3.1-flash-lite",
+            "api_key": "primary-key",
+            "base_url": "https://example.com",
+            "backup_provider": "groq",
+            "backup_model": "openai/gpt-oss-20b",
+            "backup_api_key": "backup-key",
+            "backup_base_url": "https://api.groq.com/openai/v1",
+            "llm_timeout_seconds": 10.0,
+            "llm_max_retries": 2,
+        },
+    )()
+
+    client = LLMClient(cfg=fake_cfg)
+    client._primary_client = type(
+        "FakePrimaryClient",
+        (),
+        {"chat": type("Chat", (), {"completions": FailingPrimaryCompletions()})()},
+    )()
+    client._backup_client = type(
+        "FakeBackupClient",
+        (),
+        {"chat": type("Chat", (), {"completions": SucceedingBackupCompletions()})()},
+    )()
+
+    result = asyncio.run(
+        client.call_json(
+            system_prompt="sys",
+            user_prompt="usr",
+            max_tokens=80,
+        )
+    )
+    assert result == {"ambiguous": False}
+    assert len(captured_backup_kwargs) == 1
+    assert captured_backup_kwargs[0]["model"] == "openai/gpt-oss-20b"
+    assert captured_backup_kwargs[0]["reasoning_effort"] == "low"
+    assert captured_backup_kwargs[0]["max_tokens"] >= 1024

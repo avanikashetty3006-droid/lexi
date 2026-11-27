@@ -67,6 +67,49 @@ def extract_json_object(raw_text: str) -> dict[str, Any]:
     return parsed
 
 
+def _is_groq_reasoning_model(provider: str, model: str) -> bool:
+    """Return True for Groq reasoning models that spend max_tokens on internal reasoning."""
+    if provider != "groq":
+        return False
+    lowered = model.lower()
+    return any(tag in lowered for tag in ("gpt-oss", "qwen3", "deepseek-r1"))
+
+
+def build_completion_kwargs(
+    *,
+    model: str,
+    provider: str,
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float,
+    max_tokens: int,
+    seed: int | None,
+    stream: bool = False,
+) -> dict[str, Any]:
+    """Build provider-aware chat.completions.create kwargs with safe token headroom."""
+    is_groq_reasoning = _is_groq_reasoning_model(provider, model)
+    effective_max_tokens = max(max_tokens, 1024) if is_groq_reasoning else max_tokens
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": temperature,
+        "max_tokens": effective_max_tokens,
+        "response_format": {"type": "json_object"},
+    }
+    if stream:
+        kwargs["stream"] = True
+    if provider == "gemini":
+        kwargs["reasoning_effort"] = "minimal"
+    elif is_groq_reasoning:
+        kwargs["reasoning_effort"] = "low"
+    if seed is not None and provider == "openai":
+        kwargs["seed"] = seed
+    return kwargs
+
+
 class LLMClient:
     """Async OpenAI-compatible JSON LLM client with retry and backup-provider fallback."""
 
@@ -111,20 +154,16 @@ class LLMClient:
         seed: int | None,
     ) -> str:
         client, model, provider = self._get_client(use_backup=use_backup)
-        kwargs: dict[str, Any] = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "response_format": {"type": "json_object"},
-        }
-        if provider == "gemini":
-            kwargs["reasoning_effort"] = "minimal"
-        if seed is not None and provider == "openai":
-            kwargs["seed"] = seed
+        kwargs = build_completion_kwargs(
+            model=model,
+            provider=provider,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            seed=seed,
+            stream=False,
+        )
 
         response = await client.chat.completions.create(**kwargs)
         content = response.choices[0].message.content
@@ -165,10 +204,10 @@ class LLMClient:
                 return data
             except (RateLimitError, APITimeoutError, APIConnectionError, APIStatusError) as exc:
                 last_error = exc
-                is_rate_limit = isinstance(exc, RateLimitError) or (
-                    isinstance(exc, APIStatusError) and exc.status_code == 429
-                )
-                if is_rate_limit and not use_backup and self.cfg.backup_api_key:
+                status_code = getattr(exc, "status_code", None)
+                is_rate_limit = isinstance(exc, RateLimitError) or status_code == 429
+                is_auth_error = status_code in (401, 403)
+                if not use_backup and self.cfg.backup_api_key and not is_auth_error:
                     use_backup = True
                     continue
                 if attempt < max_attempts - 1:
@@ -202,21 +241,16 @@ class LLMClient:
         """
         try:
             client, model, provider = self._get_client(use_backup=False)
-            kwargs: dict[str, Any] = {
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                "response_format": {"type": "json_object"},
-                "stream": True,
-            }
-            if provider == "gemini":
-                kwargs["reasoning_effort"] = "minimal"
-            if seed is not None and provider == "openai":
-                kwargs["seed"] = seed
+            kwargs = build_completion_kwargs(
+                model=model,
+                provider=provider,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                seed=seed,
+                stream=True,
+            )
 
             stream = await client.chat.completions.create(**kwargs)
             parts: list[str] = []
