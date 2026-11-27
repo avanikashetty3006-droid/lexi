@@ -13,8 +13,7 @@ export default function LoginPage() {
     <div className="min-h-screen bg-ink text-silver flex items-center justify-center p-6">
       <div className="w-full max-w-md bg-panel border border-line rounded-2xl p-8 text-center space-y-6">
         <div className="flex flex-col items-center gap-3">
-          <LexiLogo size={76} animated />
-          <h1 className="text-2xl font-bold text-crisp">Lexi</h1>
+          <LexiLogo size={76} animated showWordmark />
           <p className="text-sm text-silver">Asks instead of guessing.</p>
         </div>
 

@@ -17,17 +17,10 @@ export default function Header({
     <header className="px-4 py-3 border-b border-line bg-ink">
       <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <LexiLogo size={36} animated />
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-crisp font-semibold text-lg leading-none">
-                Lexi
-              </span>
-              <span className="text-slate text-xs hidden sm:inline">
-                Asks instead of guessing.
-              </span>
-            </div>
-          </div>
+          <LexiLogo size={36} animated showWordmark />
+          <span className="text-slate text-xs hidden sm:inline">
+            Asks instead of guessing.
+          </span>
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">

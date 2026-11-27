@@ -130,6 +130,7 @@ export default function AnalysisPanel({
             points={result.semantic_map}
             resolvedId={activeResolvedId}
             interpretations={result.interpretations}
+            onSelectInterpretation={onSelectInterpretation}
           />
         )}
       </div>

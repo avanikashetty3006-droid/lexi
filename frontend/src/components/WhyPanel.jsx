@@ -27,6 +27,14 @@ export default function WhyPanel({ result, threshold }) {
           confidence={result?.confidence}
           threshold={effectiveThreshold}
         />
+        {typeof result?.confidence === 'number' && (
+          <p className="text-xs text-slate">
+            With your current slider ({effectiveThreshold.toFixed(2)}), Lexi{' '}
+            {result.confidence < effectiveThreshold
+              ? 'asks for clarification.'
+              : 'answers directly.'}
+          </p>
+        )}
       </div>
 
       <div className="bg-ink border border-line rounded-xl p-4 space-y-3">
