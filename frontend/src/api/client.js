@@ -59,3 +59,21 @@ export async function baseline(sentence) {
 
   return res.json();
 }
+
+// Sends a user-interaction event (override, thumbs, slider) to POST /feedback.
+// Never throws: logging must not break the chat.
+export async function sendEvent(event) {
+  if (USE_MOCK) {
+    console.log('[Lexi event]', event);
+    return;
+  }
+  try {
+    await fetch(`${API_URL}/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify(event),
+    });
+  } catch {
+    // ignore network errors
+  }
+}

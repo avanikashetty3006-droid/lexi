@@ -1,5 +1,10 @@
 import { useState, useCallback, useRef } from 'react';
-import { analyze, baseline } from '../api/client';
+import { analyze, baseline, sendEvent } from '../api/client';
+
+const SESSION_ID =
+  typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : String(Date.now());
 
 const LOADING_STEPS = ['Detecting...', 'Voting...', 'Mapping...'];
 
@@ -182,14 +187,31 @@ export function useConversation() {
           chosen_meaning: chosen?.meaning || '',
         },
       ]);
+      sendEvent({
+        event: 'override',
+        session_id: SESSION_ID,
+        sentence: latestResult.sentence,
+        original_id: latestResult.resolved_interpretation_id,
+        chosen_id: interpretationId,
+        chosen_meaning: chosen?.meaning || '',
+        threshold,
+      });
     },
-    [latestResult]
+    [latestResult, threshold]
   );
 
   const recordFeedback = useCallback((messageId, vote) => {
     setFeedbackByMessage((prev) => ({ ...prev, [messageId]: vote }));
     console.log('[Lexi feedback]', { messageId, vote });
-  }, []);
+    sendEvent({
+      event: 'feedback',
+      session_id: SESSION_ID,
+      message_id: String(messageId),
+      vote,
+      sentence: latestResult?.sentence ?? null,
+      threshold,
+    });
+  }, [latestResult, threshold]);
 
   const retry = useCallback(async () => {
     if (!lastPayloadRef.current || loading) return;
@@ -198,6 +220,12 @@ export function useConversation() {
 
   const reanalyzeWithThreshold = useCallback(async () => {
     if (!lastSentenceRef.current || loading) return;
+    sendEvent({
+      event: 'slider',
+      session_id: SESSION_ID,
+      sentence: lastSentenceRef.current,
+      threshold,
+    });
     await runAnalyze(
       {
         sentence: lastSentenceRef.current,
