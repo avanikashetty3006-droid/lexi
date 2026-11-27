@@ -5,11 +5,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from app.config import settings
 from app.engine.baseline import run_baseline
 from app.engine.embeddings import embed_texts
-from app.engine.pipeline import analyze_sentence
+from app.engine.pipeline import analyze_sentence, stream_analyze_sentence
 from app.feedback import router as feedback_router
 from app.schemas import AnalyzeRequest, AnalyzeResponse, BaselineRequest, BaselineResponse
 
@@ -52,6 +53,16 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
         return await analyze_sentence(request)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/analyze/stream")
+async def analyze_stream(request: AnalyzeRequest) -> StreamingResponse:
+    """Stream stage updates, live 5-sample votes, response tokens, and final JSON via SSE."""
+    return StreamingResponse(
+        stream_analyze_sentence(request),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/baseline", response_model=BaselineResponse)

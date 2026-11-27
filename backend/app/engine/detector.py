@@ -4,7 +4,12 @@ import json
 from pydantic import BaseModel, Field
 
 from app.config import settings
-from app.engine.llm import LLMClient, default_llm_client, load_prompt
+from app.engine.llm import (
+    IncrementalMeaningExtractor,
+    LLMClient,
+    default_llm_client,
+    load_prompt,
+)
 from app.schemas import AmbiguitySpan, AmbiguityType, ClarificationInput, DomainType, HistoryMessage
 
 
@@ -135,6 +140,51 @@ async def detect_ambiguity(
         seed=settings.seed,
     )
     return normalize_detection(sentence, raw)
+
+
+async def stream_detect_ambiguity(
+    *,
+    sentence: str,
+    history: list[HistoryMessage],
+    domain: DomainType,
+    clarification: ClarificationInput | None,
+    llm_client: LLMClient | None = None,
+):
+    """
+    Async generator yielding `("token", text_delta)` while streaming clean
+    responses, then `("result", normalize_detection(sentence, raw))`.
+    """
+    client = llm_client or default_llm_client
+    system_prompt = load_prompt("detect")
+    user_prompt = format_detection_payload(sentence, history, domain, clarification)
+
+    if not hasattr(client, "stream_json"):
+        raw = await client.call_json(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=settings.temperature_detect,
+            schema_model=RawDetectionResult,
+            max_tokens=600,
+            seed=settings.seed,
+        )
+        yield ("result", normalize_detection(sentence, raw))
+        return
+
+    extractor = IncrementalMeaningExtractor()
+    async for evt, payload in client.stream_json(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        temperature=settings.temperature_detect,
+        schema_model=RawDetectionResult,
+        max_tokens=600,
+        seed=settings.seed,
+    ):
+        if evt == "chunk":
+            delta = extractor.feed(payload)
+            if delta:
+                yield ("token", delta)
+        elif evt == "result":
+            yield ("result", normalize_detection(sentence, payload))
 
 
 class PerTypeDetectionResult(BaseModel):
