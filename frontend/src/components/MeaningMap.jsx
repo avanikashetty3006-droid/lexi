@@ -8,6 +8,7 @@ export default function MeaningMap({
   onSelectInterpretation,
 }) {
   const [hoveredId, setHoveredId] = useState(null);
+  const [clickedId, setClickedId] = useState(null);
   const size = 340;
   const pad = 48;
   const inner = size - pad * 2;
@@ -22,11 +23,19 @@ export default function MeaningMap({
     return pad + ((1 - clamped) / 2) * inner;
   };
 
-  const activePoint =
-    points.find((p) => p.id === (hoveredId || resolvedId)) || null;
+  const selectedId =
+    resolvedId ||
+    (clickedId && points.some((p) => p.id === clickedId) ? clickedId : null);
+  const activeId = hoveredId || selectedId;
+  const activePoint = points.find((p) => p.id === activeId) || null;
   const activeInterp = activePoint
     ? interpretations.find((i) => i.id === activePoint.id)
     : null;
+
+  const handleSelectVertex = (id) => {
+    setClickedId(id);
+    onSelectInterpretation?.(id);
+  };
 
   return (
     <div className="space-y-3">
@@ -133,8 +142,9 @@ export default function MeaningMap({
                 const cy = toPy(pt.y);
                 const color =
                   INTERPRETATION_COLORS[idx % INTERPRETATION_COLORS.length];
-                const isResolved = pt.id === resolvedId;
+                const isSelected = pt.id === selectedId;
                 const isHovered = pt.id === hoveredId;
+                const isDimmed = Boolean(activeId) && !isSelected && !isHovered;
                 const interp = interpretations.find((i) => i.id === pt.id);
 
                 return (
@@ -142,47 +152,53 @@ export default function MeaningMap({
                     key={pt.id}
                     tabIndex={0}
                     role="button"
+                    aria-pressed={isSelected}
                     aria-label={`${pt.label || pt.id}: ${interp?.meaning || ''}`}
                     onMouseEnter={() => setHoveredId(pt.id)}
                     onMouseLeave={() => setHoveredId(null)}
                     onFocus={() => setHoveredId(pt.id)}
                     onBlur={() => setHoveredId(null)}
-                    onClick={() => onSelectInterpretation?.(pt.id)}
+                    onClick={() => handleSelectVertex(pt.id)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault();
-                        onSelectInterpretation?.(pt.id);
+                        handleSelectVertex(pt.id);
                       }
                     }}
+                    style={{ opacity: isDimmed ? 0.35 : 1, transition: 'opacity 150ms ease' }}
                     className="cursor-pointer focus:outline-none"
                   >
                     <title>{interp?.meaning || pt.label}</title>
-                    {(isResolved || isHovered) && (
+                    {(isSelected || isHovered) && (
                       <circle
                         cx={cx}
                         cy={cy}
-                        r={13}
-                        fill="none"
-                        stroke={isResolved ? '#FFFFFF' : '#14B8A6'}
-                        strokeWidth="2"
-                        strokeDasharray="3 2"
+                        r={14}
+                        fill={color}
+                        fillOpacity={0.22}
+                        stroke={isSelected ? '#FFFFFF' : '#14B8A6'}
+                        strokeWidth={isSelected ? '2' : '1.5'}
+                        strokeDasharray={isSelected ? undefined : '3 2'}
                       />
                     )}
                     <circle
                       cx={cx}
                       cy={cy}
-                      r={7.5}
+                      r={isSelected ? 9 : 7.5}
                       fill={color}
-                      stroke="#000000"
-                      strokeWidth="1.5"
+                      stroke={isSelected ? '#FFFFFF' : '#000000'}
+                      strokeWidth={isSelected ? '2' : '1.5'}
                     />
+                    {isSelected && (
+                      <circle cx={cx} cy={cy} r={3} fill="#000000" />
+                    )}
                     <text
                       x={cx}
-                      y={cy - 15}
+                      y={cy - 17}
                       textAnchor="middle"
-                      fill="#FFFFFF"
+                      fill={isSelected ? '#FFFFFF' : '#C0C0C0'}
                       fontSize="11"
-                      fontWeight={isResolved ? '600' : '400'}
+                      fontWeight={isSelected ? '700' : '400'}
                     >
                       {pt.label || pt.id}
                     </text>
@@ -192,12 +208,17 @@ export default function MeaningMap({
             </svg>
 
             {activePoint && (
-              <div className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-xs text-silver flex items-center justify-between gap-2">
+              <div className="w-full bg-panel border border-[#6C5CE7]/60 rounded-lg px-3 py-2 text-xs text-silver flex items-center justify-between gap-2">
                 <div>
                   <span className="font-mono text-crisp uppercase mr-1.5">
                     {activePoint.id}
                   </span>
                   {activeInterp?.meaning || activePoint.label}
+                  {typeof activeInterp?.probability === 'number' && (
+                    <span className="ml-2 font-mono text-[11px] text-[#14B8A6]">
+                      ({Math.round(activeInterp.probability * 100)}%)
+                    </span>
+                  )}
                 </div>
                 <span className="font-mono text-[11px] text-slate shrink-0">
                   ({Number(activePoint.x ?? 0).toFixed(2)},{' '}
