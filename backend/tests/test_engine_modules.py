@@ -52,6 +52,8 @@ def test_anaphora_extractors():
     candidates = extract_candidate_antecedents(sentence, [])
     assert "Alice" in candidates
     assert "Maya" in candidates
+    assert extract_pronouns("I watered the plant on the balcony this morning.") == []
+    assert [p.text for p in extract_pronouns("This upset the client.")] == ["This"]
 
 
 def test_anaphora_disagreement_vs_agreement():

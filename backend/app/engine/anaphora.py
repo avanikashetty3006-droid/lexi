@@ -13,7 +13,8 @@ from app.schemas import AmbiguitySpan, HistoryMessage
 # Third-person and demonstrative pronouns that commonly trigger anaphoric ambiguity.
 # Note: "that" is matched only when NOT acting as a complementizer after reporting verbs.
 _PRONOUN_RE = re.compile(
-    r"\b(the former|the latter|he|him|his|she|her|hers|they|them|their|theirs|it|its|this|these|those)\b",
+    r"\b(?:the former|the latter|he|him|his|she|her|hers|they|them|their|theirs|it|its)\b"
+    r"|\b(?:this|these|those)\b(?=\s+(?:is|was|are|were|will|would|could|should|can|may|might|has|had|means|makes|upset|caused|failed|worked|broke)\b|[.,;:?!]|$)",
     re.IGNORECASE,
 )
 _COMPLEMENTIZER_THAT_RE = re.compile(

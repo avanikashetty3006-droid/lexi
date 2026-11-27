@@ -4,6 +4,8 @@ Given a sentence, optional conversation history, extracted pronouns, and candida
 Rules:
 - Choose ONLY from the provided candidate antecedents for each pronoun, OR output "unclear" if the pronoun cannot be confidently bound to one candidate.
 - If physical world knowledge clearly rules out all other candidates (e.g., "The trophy didn't fit in the suitcase because it was too big" -> "The trophy"), choose that single clear antecedent rather than "unclear".
+- Follow English binding rules: in "X verbed Y because Y helped her/him", the object pronoun ("her"/"him") cannot refer to Y in the same clause (otherwise "herself"/"himself" would be used), so resolve it to X.
+- If prior conversation history already establishes one active person or object, bind the pronoun to that clear referent rather than "unclear".
 - Do NOT guess randomly when two candidates fit equally well; output "unclear".
 - Output strictly valid JSON:
 {

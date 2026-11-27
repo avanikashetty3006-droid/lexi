@@ -21,9 +21,9 @@ CHATBOT RESPONSE RULE WHEN "ambiguous" IS false:
 Ambiguity taxonomy (use ONLY these exact type labels):
 - "lexical": a word or short phrase has 2+ genuinely plausible senses even in context (e.g., "I saw the bat on the porch", "We need a lighter tool").
 - "syntactic": sentence grammar / attachment allows 2+ distinct parses (e.g., "I saw the man with the telescope", "Flying planes can be dangerous", "The chicken is ready to eat").
-- "semantic": quantifier scope, negation scope, collective vs. distributive reading, or role ambiguity (e.g., "Every student read a book", "Two engineers reviewed three specs", "I didn't call because I was busy").
-- "contextual": underspecified referents, time/location/metric, or missing criteria that depend on unstated user intent or domain context (e.g., "Make it faster", "Schedule the meeting for next Friday", "The system should handle large files").
-- "anaphoric": a pronoun or referring expression ("it", "they", "he", "she", "this", "that", "the former") has 2+ plausible antecedents in the sentence or conversation history (e.g., "Alice told Maya that she failed the test", "The server crashed the database after it was upgraded").
+- "semantic": quantifier scope, negation scope, collective vs. distributive plural/price readings (e.g., "The boys lifted the table", "The two tickets cost 500 rupees" = each vs. combined), inclusive vs. exclusive deadlines (e.g., "until 15 December"), specific vs. kind readings ("wants to buy a car like Ravi's"), or general quantifier scope ("Every student read a book", "Someone has to clean every desk", "I didn't call because I was busy").
+- "contextual": underspecified referents, time/location/metric, unstated object/version ("Share the notes with the team", "Update the banner on the homepage"), or missing criteria ("Make it faster", "Schedule the meeting for next Friday", "The system should handle large files").
+- "anaphoric": a pronoun or referring expression ("it", "they", "he", "she", "this", "that", "the former") has 2+ plausible antecedents in the sentence or conversation history (e.g., "Alice told Maya that she failed the test", "The server crashed the database after it was upgraded"). Do NOT flag "X thanked Y because Y helped her" (binding rules resolve "her" to X).
 
 Domain guidance:
 - "general": everyday communication.
