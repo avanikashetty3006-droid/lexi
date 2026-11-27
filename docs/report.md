@@ -51,7 +51,7 @@ Uncertainty: 95% percentile bootstrap over rows (1000 resamples, seed 0).
 
 ## 6. Label quality
 TODO: a second person labels at least 50 rows blind. Report Cohen's kappa for ambiguous vs clean, and list disagreements.
-Known disputed example: "The trophy didn't fit in the suitcase because it was too big." We label it clean (common sense picks the trophy); decide as a team and say so here.
+Disputed example: "The trophy didn't fit in the suitcase because it was too big." The pronoun "it" is grammatically open, but every reasonable reader resolves it to the trophy, because a suitcase cannot fail to hold something by being too big. Under our definition (a reasonable reader could pick 2+ meanings given the context) it is therefore labelled **clean** (row `hn01`, dev split). It also serves as a hard negative: a system that flags it counts as a false positive. Team confirmation: [TO FILL: names and date once the team agrees].
 
 ## 7. Results
 TODO. Paste from the dashboard: table of Lexi vs baseline on TEST with confidence intervals, per-type recall, calibration, latency.
