@@ -6,7 +6,14 @@ import re
 from functools import lru_cache
 from typing import Any, TypeVar
 
-from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI, RateLimitError
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    AsyncOpenAI,
+    DefaultAsyncHttpxClient,
+    RateLimitError,
+)
 from pydantic import BaseModel, ValidationError
 
 from app.config import Settings, settings
@@ -14,6 +21,24 @@ from app.config import Settings, settings
 T = TypeVar("T", bound=BaseModel)
 
 _CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.MULTILINE)
+
+
+def _build_ipv4_http_client(timeout_seconds: float):
+    """Force IPv4 transport to avoid Windows IPv6 DNS/TCP 21-second stalls."""
+    try:
+        import httpx2
+
+        return DefaultAsyncHttpxClient(
+            transport=httpx2.AsyncHTTPTransport(local_address="0.0.0.0"),
+            timeout=timeout_seconds,
+        )
+    except Exception:
+        import httpx
+
+        return httpx.AsyncClient(
+            transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0"),
+            timeout=timeout_seconds,
+        )
 
 
 @lru_cache(maxsize=32)
@@ -58,7 +83,7 @@ class LLMClient:
                 self._backup_client = AsyncOpenAI(
                     api_key=self.cfg.backup_api_key,
                     base_url=self.cfg.backup_base_url,
-                    timeout=self.cfg.llm_timeout_seconds,
+                    http_client=_build_ipv4_http_client(self.cfg.llm_timeout_seconds),
                 )
             return self._backup_client, self.cfg.backup_model, self.cfg.backup_provider
 
@@ -71,7 +96,7 @@ class LLMClient:
             self._primary_client = AsyncOpenAI(
                 api_key=self.cfg.api_key,
                 base_url=self.cfg.base_url,
-                timeout=self.cfg.llm_timeout_seconds,
+                http_client=_build_ipv4_http_client(self.cfg.llm_timeout_seconds),
             )
         return self._primary_client, self.cfg.model_name, self.cfg.llm_provider
 
@@ -120,8 +145,9 @@ class LLMClient:
         """Call LLM in JSON mode with retry, Pydantic validation, and backup fallback."""
         last_error: Exception | None = None
         use_backup = False
+        max_attempts = max(self.cfg.llm_max_retries + 2, 4)
 
-        for attempt in range(self.cfg.llm_max_retries + 2):
+        for attempt in range(max_attempts):
             try:
                 raw = await self._request_once(
                     use_backup=use_backup,
@@ -143,8 +169,9 @@ class LLMClient:
                 if is_rate_limit and not use_backup and self.cfg.backup_api_key:
                     use_backup = True
                     continue
-                if attempt < self.cfg.llm_max_retries:
-                    await asyncio.sleep(0.4 * (attempt + 1))
+                if attempt < max_attempts - 1:
+                    delay = (2.5 * (attempt + 1)) if is_rate_limit else (0.4 * (attempt + 1))
+                    await asyncio.sleep(delay)
                     continue
                 break
             except (ValueError, json.JSONDecodeError, ValidationError) as exc:

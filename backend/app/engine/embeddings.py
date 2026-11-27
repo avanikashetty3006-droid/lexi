@@ -31,7 +31,7 @@ def embed_texts(texts: list[str]) -> np.ndarray:
 
 def cluster_by_cosine(
     embeddings: np.ndarray,
-    cosine_threshold: float = 0.80,
+    cosine_threshold: float = 0.975,
 ) -> list[list[int]]:
     """Cluster normalized embedding vectors using cosine similarity >= threshold."""
     n = embeddings.shape[0]
@@ -124,7 +124,7 @@ def project_to_2d_pca(embeddings: np.ndarray) -> list[tuple[float, float]]:
 def analyze_semantic_space(
     interpretations: list[Interpretation],
     *,
-    cosine_threshold: float = 0.80,
+    cosine_threshold: float = 0.975,
     embed_fn: EmbedFn | None = None,
 ) -> tuple[float, list[SemanticMapPoint]]:
     """

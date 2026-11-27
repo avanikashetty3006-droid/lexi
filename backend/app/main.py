@@ -1,14 +1,27 @@
 from __future__ import annotations
 
+import os
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.engine.baseline import run_baseline
+from app.engine.embeddings import embed_texts
 from app.engine.pipeline import analyze_sentence
 from app.schemas import AnalyzeRequest, AnalyzeResponse, BaselineRequest, BaselineResponse
 
-app = FastAPI(title="Lexi Ambiguity Engine", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Pre-warm local SentenceTransformer embeddings on server startup."""
+    if os.getenv("LEXI_SKIP_WARMUP") != "1":
+        embed_texts(["Lexi embedding warmup"])
+    yield
+
+
+app = FastAPI(title="Lexi Ambiguity Engine", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

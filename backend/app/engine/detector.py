@@ -131,6 +131,7 @@ async def detect_ambiguity(
         user_prompt=user_prompt,
         temperature=settings.temperature_detect,
         schema_model=RawDetectionResult,
+        max_tokens=600,
         seed=settings.seed,
     )
     return normalize_detection(sentence, raw)
