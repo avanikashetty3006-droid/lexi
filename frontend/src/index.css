@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --bg-ink: #000000;
+  --bg-panel: #1C1C1E;
+  --border-line: #2C2C2F;
+  --text-slate: #708090;
+  --text-silver: #C0C0C0;
+  --text-crisp: #FFFFFF;
+  --accent-violet: #6C5CE7;
+  --accent-teal: #14B8A6;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-ink);
+  color: var(--text-silver);
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+}
