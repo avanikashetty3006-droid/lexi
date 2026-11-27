@@ -197,3 +197,128 @@ def test_history_context_sets_resolution_basis_and_threshold_controls_clarify(mo
     assert res.ambiguous is False
     assert res.resolution_basis == "context"
     assert res.threshold_used == 0.85
+
+
+def test_threshold_reuse_cache_recomputes_clarification_without_extra_llm_calls(monkeypatch):
+    from app.engine.llm import LLMClient
+    from app.engine.pipeline import clear_analyze_cache
+
+    clear_analyze_cache()
+    monkeypatch.setattr("app.engine.embeddings.embed_texts", _orthogonal_embed)
+
+    class CountingLLMClient(LLMClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        async def _request_once(self, *, system_prompt: str, user_prompt: str, **kwargs) -> str:
+            self.calls += 1
+            if "semantic evaluator" in system_prompt:
+                # 4 out of 5 say i1, 1 says i2 -> confidence = 0.8
+                seed = kwargs.get("seed") or 0
+                choice = "i2" if (seed % 5 == 0) else "i1"
+                return json.dumps({"choice": choice, "reason": "test"})
+            return json.dumps(
+                {
+                    "ambiguous": True,
+                    "ambiguities": [
+                        {"type": "lexical", "span": "duck", "explanation": "Verb or noun."}
+                    ],
+                    "interpretations": [
+                        {"id": "i1", "meaning": "Saw her lower her head."},
+                        {"id": "i2", "meaning": "Saw her pet bird."},
+                    ],
+                    "clarification_question": "Did she bend down or own a bird?",
+                    "options": ["Lowered head", "Pet bird"],
+                }
+            )
+
+    client = CountingLLMClient()
+    res_low = asyncio.run(
+        analyze_sentence(
+            AnalyzeRequest(sentence="I saw her duck.", threshold=0.5),
+            llm_client=client,
+            enable_logging=False,
+        )
+    )
+    assert res_low.threshold_used == 0.5
+    assert res_low.confidence == 0.8
+    assert res_low.needs_clarification is False
+    assert res_low.resolved_interpretation_id == "i1"
+    calls_after_first = client.calls
+
+    res_high = asyncio.run(
+        analyze_sentence(
+            AnalyzeRequest(sentence="I saw her duck.", threshold=0.95),
+            llm_client=client,
+            enable_logging=False,
+        )
+    )
+    assert client.calls == calls_after_first
+    assert res_high.threshold_used == 0.95
+    assert res_high.confidence == 0.8
+    assert res_high.needs_clarification is True
+    assert res_high.resolved_interpretation_id is None
+    assert res_high.clarification_question == "Did she bend down or own a bird?"
+    clear_analyze_cache()
+
+
+def test_conversational_greeting_no_clarification_while_monitoring_ambiguity(monkeypatch):
+    from app.engine.pipeline import clear_analyze_cache
+
+    clear_analyze_cache()
+
+    class ChatClient:
+        async def call_json(self, *, user_prompt: str, schema_model=None, **kwargs):
+            payload = json.loads(user_prompt)
+            if payload["sentence"].lower().startswith("hi"):
+                return RawDetectionResult(
+                    ambiguous=False,
+                    ambiguities=[],
+                    interpretations=[
+                        RawInterpretationItem(id="i1", meaning="Hi there! How can I help you today?")
+                    ],
+                    clarification_question=None,
+                    options=[],
+                )
+            if "choice" in getattr(schema_model, "model_fields", {}):
+                return schema_model.model_validate({"choice": "unclear", "reason": "ambiguous"})
+            return RawDetectionResult(
+                ambiguous=True,
+                ambiguities=[
+                    {"type": "lexical", "span": "match", "explanation": "Sports match or fire matchstick."}
+                ],
+                interpretations=[
+                    RawInterpretationItem(id="i1", meaning="Tell me about the sports match."),
+                    RawInterpretationItem(id="i2", meaning="Tell me about the fire matchstick."),
+                ],
+                clarification_question="Did you mean a sports match or a matchstick?",
+                options=["Sports match", "Matchstick"],
+            )
+
+    greet = asyncio.run(
+        analyze_sentence(
+            AnalyzeRequest(sentence="Hi, how are you?"),
+            llm_client=ChatClient(),
+            embed_fn=_orthogonal_embed,
+            enable_logging=False,
+        )
+    )
+    assert greet.ambiguous is False
+    assert greet.needs_clarification is False
+    assert greet.clarification_question is None
+    assert "help" in greet.interpretations[0].meaning.lower()
+
+    ambig = asyncio.run(
+        analyze_sentence(
+            AnalyzeRequest(sentence="Tell me about the match."),
+            llm_client=ChatClient(),
+            embed_fn=_orthogonal_embed,
+            enable_logging=False,
+        )
+    )
+    assert ambig.ambiguous is True
+    assert ambig.needs_clarification is True
+    assert ambig.clarification_question is not None
+
+

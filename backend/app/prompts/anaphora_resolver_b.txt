@@ -3,6 +3,7 @@ Given a sentence, optional conversation history, extracted pronouns, and candida
 
 Rules:
 - Choose ONLY from the provided candidate antecedents for each pronoun, OR output "unclear" if two or more antecedents remain genuinely plausible.
+- If common-sense physical world knowledge clearly singles out one candidate (e.g., "The trophy didn't fit in the suitcase because it was too big" -> "The trophy"), choose that antecedent.
 - Output strictly valid JSON:
 {
   "resolutions": [
