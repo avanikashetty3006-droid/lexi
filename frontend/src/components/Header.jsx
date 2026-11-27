@@ -10,8 +10,6 @@ export default function Header({
   onToggleCompare,
   onOpenAbout,
   onNewConversation,
-  user,
-  onSignOut,
 }) {
   return (
     <header className="px-4 py-3 border-b border-line bg-ink">
@@ -73,32 +71,6 @@ export default function Header({
           >
             New conversation
           </button>
-
-          {user && (
-            <div className="flex items-center gap-2 pl-2 border-l border-line">
-              {user.picture ? (
-                <img
-                  src={user.picture}
-                  alt={user.name}
-                  className="w-6 h-6 rounded-full border border-line"
-                />
-              ) : (
-                <span className="w-6 h-6 rounded-full bg-panel border border-line flex items-center justify-center text-xs text-crisp">
-                  {user.name?.[0]?.toUpperCase() || 'G'}
-                </span>
-              )}
-              <span className="text-xs text-silver hidden md:inline">
-                {user.name}
-              </span>
-              <button
-                type="button"
-                onClick={onSignOut}
-                className="text-xs text-slate hover:text-crisp focus:outline-none focus:ring-2 focus:ring-[#6C5CE7] rounded px-1.5 py-0.5"
-              >
-                Sign out
-              </button>
-            </div>
-          )}
         </div>
       </div>
     </header>
