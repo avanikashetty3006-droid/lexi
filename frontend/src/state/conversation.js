@@ -268,7 +268,7 @@ export function useConversation() {
   }, [compareMode, domain, history, loading, runAnalyze, threshold]);
 
   const clearConversation = useCallback(() => {
-    stopLoadingSteps();
+    setLoadingStep('');
     lastPayloadRef.current = null;
     lastSentenceRef.current = '';
     setMessages([]);
@@ -279,7 +279,7 @@ export function useConversation() {
     setFeedbackByMessage({});
     setError(null);
     setLoading(false);
-  }, [stopLoadingSteps]);
+  }, []);
 
   return {
     messages,
