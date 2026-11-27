@@ -1,12 +1,28 @@
 import { useState, useCallback, useRef } from 'react';
-import { analyze, baseline, sendEvent } from '../api/client';
+import { analyzeStream, baseline, sendEvent } from '../api/client';
 
 const SESSION_ID =
   typeof crypto !== 'undefined' && crypto.randomUUID
     ? crypto.randomUUID()
     : String(Date.now());
 
-const LOADING_STEPS = ['Detecting...', 'Voting...', 'Mapping...'];
+function formatStageStep(data) {
+  if (!data?.step) return '';
+  if (data.step === 'detecting') {
+    return data.message || 'Checking ambiguity...';
+  }
+  if (data.step === 'detected') {
+    return data.ambiguous
+      ? 'Ambiguity found — checking confidence...'
+      : 'Writing reply...';
+  }
+  if (data.step === 'voting') {
+    return data.total_samples
+      ? `Voting 0/${data.total_samples}...`
+      : 'Voting...';
+  }
+  return '';
+}
 
 export function useConversation() {
   const [messages, setMessages] = useState([]);
@@ -24,92 +40,106 @@ export function useConversation() {
 
   const lastPayloadRef = useRef(null);
   const lastSentenceRef = useRef('');
-  const stepTimerRef = useRef(null);
 
-  const startLoadingSteps = useCallback(() => {
-    let idx = 0;
-    setLoadingStep(LOADING_STEPS[0]);
-    stepTimerRef.current = setInterval(() => {
-      idx = (idx + 1) % LOADING_STEPS.length;
-      setLoadingStep(LOADING_STEPS[idx]);
-    }, 900);
-  }, []);
+  const runAnalyze = useCallback(async (payload, { fetchBaseline = false } = {}) => {
+    lastPayloadRef.current = payload;
+    setLoading(true);
+    setError(null);
+    setLoadingStep('Checking ambiguity...');
 
-  const stopLoadingSteps = useCallback(() => {
-    if (stepTimerRef.current) {
-      clearInterval(stepTimerRef.current);
-      stepTimerRef.current = null;
-    }
-    setLoadingStep('');
-  }, []);
+    const msgId = `a-${Date.now()}`;
+    let streamedText = '';
+    let hasStreamBubble = false;
 
-  const runAnalyze = useCallback(
-    async (payload, { fetchBaseline = false } = {}) => {
-      lastPayloadRef.current = payload;
-      setLoading(true);
-      setError(null);
-      startLoadingSteps();
-
-      try {
-        const [result, baseRes] = await Promise.all([
-          analyze(payload),
-          fetchBaseline ? baseline(payload.sentence) : Promise.resolve(null),
-        ]);
-
-        setLatestResult(result);
-        setOverriddenId(null);
-        if (baseRes) {
-          setBaselineResult(baseRes);
-        }
-
-        const resolvedInterp = result.interpretations?.find(
-          (i) => i.id === result.resolved_interpretation_id
-        );
-
-        let assistantText =
-          resolvedInterp?.meaning ||
-          result.interpretations?.[0]?.meaning ||
-          'Got it.';
-        if (result.needs_clarification && result.clarification_question) {
-          assistantText = result.clarification_question;
-        } else if (result.resolution_basis === 'clarification' && resolvedInterp) {
-          assistantText = `Got it: ${resolvedInterp.meaning} (resolved by your answer)`;
-        } else if (result.resolution_basis === 'context' && resolvedInterp) {
-          assistantText = `Got it: ${resolvedInterp.meaning} (resolved by context)`;
-        } else if (result.ambiguous && resolvedInterp) {
-          assistantText = resolvedInterp.meaning;
-        }
-
-        const msgId = `a-${Date.now()}`;
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: msgId,
-            role: 'assistant',
-            content: assistantText,
-            result,
+    try {
+      const [result, baseRes] = await Promise.all([
+        analyzeStream(payload, {
+          onStage: (data) => {
+            const label = formatStageStep(data);
+            if (label) {
+              setLoadingStep(label);
+            }
           },
-        ]);
+          onVote: (data) => {
+            if (data?.completed != null && data?.total != null) {
+              setLoadingStep(`Voting ${data.completed}/${data.total}...`);
+            }
+          },
+          onToken: (data) => {
+            const chunk = data?.text || '';
+            if (!chunk) return;
+            streamedText += chunk;
+            const snapshot = streamedText;
+            const creating = !hasStreamBubble;
+            hasStreamBubble = true;
+            setMessages((prev) =>
+              creating && !prev.some((m) => m.id === msgId)
+                ? [
+                    ...prev,
+                    { id: msgId, role: 'assistant', content: snapshot, result: null },
+                  ]
+                : prev.map((m) =>
+                    m.id === msgId ? { ...m, content: snapshot } : m
+                  )
+            );
+          },
+        }),
+        fetchBaseline ? baseline(payload.sentence) : Promise.resolve(null),
+      ]);
 
-        setHistory((prev) => [
-          ...prev,
-          { role: 'user', content: payload.sentence },
-          { role: 'assistant', content: assistantText },
-        ]);
-
-        return result;
-      } catch (err) {
-        setError(
-          err?.message || 'Could not reach the analysis service. Please try again.'
-        );
-        return null;
-      } finally {
-        stopLoadingSteps();
-        setLoading(false);
+      setLatestResult(result);
+      setOverriddenId(null);
+      if (baseRes) {
+        setBaselineResult(baseRes);
       }
-    },
-    [startLoadingSteps, stopLoadingSteps]
-  );
+
+      const resolvedInterp = result.interpretations?.find(
+        (i) => i.id === result.resolved_interpretation_id
+      );
+
+      let assistantText =
+        resolvedInterp?.meaning ||
+        result.interpretations?.[0]?.meaning ||
+        streamedText ||
+        'Got it.';
+      if (result.needs_clarification && result.clarification_question) {
+        assistantText = result.clarification_question;
+      } else if (result.resolution_basis === 'clarification' && resolvedInterp) {
+        assistantText = `Got it: ${resolvedInterp.meaning} (resolved by your answer)`;
+      } else if (result.resolution_basis === 'context' && resolvedInterp) {
+        assistantText = `Got it: ${resolvedInterp.meaning} (resolved by context)`;
+      } else if (result.ambiguous && resolvedInterp) {
+        assistantText = resolvedInterp.meaning;
+      }
+
+      setMessages((prev) =>
+        prev.some((m) => m.id === msgId)
+          ? prev.map((m) =>
+              m.id === msgId ? { ...m, content: assistantText, result } : m
+            )
+          : [...prev, { id: msgId, role: 'assistant', content: assistantText, result }]
+      );
+
+      setHistory((prev) => [
+        ...prev,
+        { role: 'user', content: payload.sentence },
+        { role: 'assistant', content: assistantText },
+      ]);
+
+      return result;
+    } catch (err) {
+      if (hasStreamBubble) {
+        setMessages((prev) => prev.filter((m) => m.id !== msgId));
+      }
+      setError(
+        err?.message || 'Could not reach the analysis service. Please try again.'
+      );
+      return null;
+    } finally {
+      setLoadingStep('');
+      setLoading(false);
+    }
+  }, []);
 
   const sendSentence = useCallback(
     async (rawText) => {
