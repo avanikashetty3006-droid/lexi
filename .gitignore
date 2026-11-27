@@ -5,3 +5,8 @@ node_modules/
 dist/
 .env
 .DS_Store
+
+backend/logs/*
+!backend/logs/.gitkeep
+.pytest_cache/
+.streamlit/secrets.toml
