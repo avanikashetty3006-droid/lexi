@@ -382,3 +382,261 @@ async def analyze_sentence(
     if enable_logging:
         log_interaction(request, response, log_path=log_path)
     return response
+
+
+def format_sse(event: str, payload: dict) -> str:
+    """Format a Server-Sent Events (SSE) frame."""
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _extract_reply_text(response: AnalyzeResponse) -> str:
+    """Select the primary assistant message text to stream for the chat bubble."""
+    if response.needs_clarification and response.clarification_question:
+        return response.clarification_question
+    rid = response.resolved_interpretation_id
+    for interp in response.interpretations:
+        if rid and interp.id == rid:
+            return interp.meaning
+    return response.interpretations[0].meaning if response.interpretations else ""
+
+
+async def stream_analyze_sentence(
+    request: AnalyzeRequest,
+    llm_client: LLMClient | None = None,
+    embed_fn: EmbedFn | None = None,
+    log_path: Path | None = None,
+    enable_logging: bool = True,
+    use_cache: bool = True,
+):
+    """
+    Async generator streaming real-time SSE progress (`stage`, `vote`), assistant
+    response chunks (`token`), and the final validated `AnalyzeResponse` (`done`).
+    """
+    started = time.perf_counter()
+    client = llm_client or default_llm_client
+    threshold_used = (
+        request.threshold if request.threshold is not None else settings.threshold
+    )
+    cache_allowed = use_cache and isinstance(client, LLMClient) and embed_fn is None
+    cache_key = _make_cache_key(request) if cache_allowed else ""
+
+    yield format_sse("stage", {"step": "detecting", "message": "Checking ambiguity..."})
+
+    try:
+        if cache_allowed:
+            cached = _get_cached(cache_key)
+            if cached is not None:
+                response = _finalize_from_cached(request, cached, threshold_used, started)
+                text = _extract_reply_text(response)
+                for idx, word in enumerate(text.split(" ")):
+                    yield format_sse("token", {"text": ("" if idx == 0 else " ") + word})
+                if enable_logging:
+                    log_interaction(request, response, log_path=log_path)
+                yield format_sse("done", response.model_dump())
+                return
+
+        if request.clarification is not None:
+            ctx_res = await resolve_clarification(
+                sentence=request.sentence,
+                history=request.history,
+                clarification=request.clarification,
+                llm_client=client,
+            )
+            if ctx_res.resolved and ctx_res.resolved_meaning.strip():
+                raw_interps = [
+                    RawInterpretationItem(id="i1", meaning=ctx_res.resolved_meaning.strip())
+                ]
+                interpretations = build_interpretations(
+                    raw_interps, ambiguous=False, vote_split={"i1": 1.0}
+                )
+                semantic_entropy, semantic_map = analyze_semantic_space(
+                    interpretations, embed_fn=embed_fn
+                )
+                latency_ms = int((time.perf_counter() - started) * 1000)
+                response = AnalyzeResponse(
+                    sentence=request.sentence,
+                    ambiguous=False,
+                    confidence=1.0,
+                    ambiguities=[],
+                    interpretations=interpretations,
+                    uncertainty=UncertaintyInfo(
+                        vote_split={"i1": 1.0}, semantic_entropy=semantic_entropy
+                    ),
+                    semantic_map=semantic_map,
+                    needs_clarification=False,
+                    clarification_question=None,
+                    options=[],
+                    resolved_interpretation_id="i1",
+                    resolution_basis="clarification",
+                    threshold_used=threshold_used,
+                    latency_ms=latency_ms,
+                )
+                for idx, word in enumerate(_extract_reply_text(response).split(" ")):
+                    yield format_sse("token", {"text": ("" if idx == 0 else " ") + word})
+                if enable_logging:
+                    log_interaction(request, response, log_path=log_path)
+                yield format_sse("done", response.model_dump())
+                return
+
+        run_anaphora = has_anaphora_candidates(request.sentence, request.history)
+        detect_coro = detect_ambiguity(
+            sentence=request.sentence,
+            history=request.history,
+            domain=request.domain,
+            clarification=request.clarification,
+            llm_client=client,
+        )
+        if run_anaphora:
+            (
+                (ambiguous, ambiguities, raw_interps, question, options),
+                (ana_ambiguous, ana_spans, ana_meanings),
+            ) = await asyncio.gather(
+                detect_coro,
+                detect_anaphora(
+                    sentence=request.sentence,
+                    history=request.history,
+                    llm_client=client,
+                ),
+            )
+            ambiguous, ambiguities, raw_interps, question, options = _merge_anaphora(
+                ambiguous=ambiguous,
+                ambiguities=ambiguities,
+                raw_interps=raw_interps,
+                question=question,
+                options=options,
+                ana_ambiguous=ana_ambiguous,
+                ana_spans=ana_spans,
+                ana_meanings=ana_meanings,
+            )
+        else:
+            ambiguous, ambiguities, raw_interps, question, options = await detect_coro
+
+        yield format_sse(
+            "stage",
+            {
+                "step": "detected",
+                "ambiguous": ambiguous,
+                "ambiguities": [a.model_dump() for a in ambiguities],
+                "interpretations": [{"id": r.id, "meaning": r.meaning} for r in raw_interps],
+            },
+        )
+
+        top_id: str | None = "i1"
+        if not ambiguous:
+            vote_split = {"i1": 1.0}
+            confidence = 1.0
+            interpretations = build_interpretations(
+                raw_interps, ambiguous=False, vote_split=vote_split
+            )
+            needs_clarification = False
+            clarification_question = None
+            final_options: list[str] = []
+            resolved_id: str | None = "i1"
+        else:
+            yield format_sse("stage", {"step": "voting", "total_samples": settings.n_samples})
+            vote_queue: asyncio.Queue[tuple[int, int, str] | None] = asyncio.Queue()
+
+            async def _push_vote(completed: int, total: int, choice: str) -> None:
+                await vote_queue.put((completed, total, choice))
+
+            async def _run_votes():
+                try:
+                    return await run_vote_confidence(
+                        sentence=request.sentence,
+                        history=request.history,
+                        domain=request.domain,
+                        interpretations=raw_interps,
+                        llm_client=client,
+                        on_vote=_push_vote,
+                    )
+                finally:
+                    await vote_queue.put(None)
+
+            vote_task = asyncio.create_task(_run_votes())
+            while True:
+                item = await vote_queue.get()
+                if item is None:
+                    break
+                completed, total, choice = item
+                yield format_sse(
+                    "vote", {"completed": completed, "total": total, "choice": choice}
+                )
+            vote_split, confidence, top_id = await vote_task
+
+            interpretations = build_interpretations(
+                raw_interps, ambiguous=True, vote_split=vote_split
+            )
+            needs_clarification = confidence < threshold_used
+            clarification_question, final_options = await prepare_clarification(
+                sentence=request.sentence,
+                ambiguities=ambiguities,
+                interpretations=interpretations,
+                draft_question=question,
+                draft_options=options,
+                llm_client=client,
+            )
+            if not needs_clarification:
+                clarification_question = None
+                final_options = []
+                resolved_id = top_id
+            else:
+                resolved_id = None
+
+        semantic_entropy, semantic_map = analyze_semantic_space(
+            interpretations, embed_fn=embed_fn
+        )
+        if cache_allowed:
+            draft_q, draft_opts = (
+                (clarification_question, final_options)
+                if (ambiguous and needs_clarification)
+                else (question, options)
+            )
+            _put_cached(
+                cache_key,
+                _CachedAnalysis(
+                    created_at=time.monotonic(),
+                    ambiguous=ambiguous,
+                    confidence=confidence,
+                    ambiguities=ambiguities,
+                    interpretations=interpretations,
+                    vote_split=vote_split,
+                    semantic_entropy=semantic_entropy,
+                    semantic_map=semantic_map,
+                    draft_question=draft_q,
+                    draft_options=draft_opts,
+                    top_id=top_id,
+                ),
+            )
+
+        resolution_basis = determine_resolution_basis(
+            request, ambiguous=ambiguous, needs_clarification=needs_clarification
+        )
+        latency_ms = int((time.perf_counter() - started) * 1000)
+
+        response = AnalyzeResponse(
+            sentence=request.sentence,
+            ambiguous=ambiguous,
+            confidence=confidence,
+            ambiguities=ambiguities,
+            interpretations=interpretations,
+            uncertainty=UncertaintyInfo(
+                vote_split=vote_split,
+                semantic_entropy=semantic_entropy,
+            ),
+            semantic_map=semantic_map,
+            needs_clarification=needs_clarification,
+            clarification_question=clarification_question,
+            options=final_options,
+            resolved_interpretation_id=resolved_id,
+            resolution_basis=resolution_basis,
+            threshold_used=threshold_used,
+            latency_ms=latency_ms,
+        )
+        for idx, word in enumerate(_extract_reply_text(response).split(" ")):
+            yield format_sse("token", {"text": ("" if idx == 0 else " ") + word})
+        if enable_logging:
+            log_interaction(request, response, log_path=log_path)
+        yield format_sse("done", response.model_dump())
+    except Exception as exc:
+        yield format_sse("error", {"detail": str(exc)})
+

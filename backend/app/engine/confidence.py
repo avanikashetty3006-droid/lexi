@@ -51,6 +51,7 @@ async def run_vote_confidence(
     interpretations: list[RawInterpretationItem],
     n_samples: int | None = None,
     llm_client: LLMClient | None = None,
+    on_vote=None,
 ) -> tuple[dict[str, float], float, str | None]:
     """Run N parallel high-temperature LLM votes to estimate speaker-intent confidence."""
     client = llm_client or default_llm_client
@@ -85,14 +86,16 @@ async def run_vote_confidence(
             kwargs["max_retries"] = 1
         return await client.call_json(**kwargs)
 
-    tasks = [_single_vote(i) for i in range(samples)]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
+    tasks = [asyncio.create_task(_single_vote(i)) for i in range(samples)]
     choices: list[str] = []
-    for res in results:
-        if isinstance(res, VoteResult):
-            choices.append(res.choice.strip())
-        else:
-            choices.append("unclear")
+    for completed_idx, fut in enumerate(asyncio.as_completed(tasks), start=1):
+        try:
+            res = await fut
+            choice = res.choice.strip() if isinstance(res, VoteResult) else "unclear"
+        except Exception:
+            choice = "unclear"
+        choices.append(choice)
+        if on_vote is not None:
+            await on_vote(completed_idx, samples, choice)
 
     return compute_vote_confidence(choices, valid_ids)

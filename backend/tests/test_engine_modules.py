@@ -324,3 +324,58 @@ def test_conversational_greeting_no_clarification_while_monitoring_ambiguity(mon
     assert ambig.clarification_question is not None
 
 
+def test_analyze_stream_sse_events(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    class StreamClient:
+        async def call_json(self, *, schema_model=None, **kwargs):
+            if "choice" in getattr(schema_model, "model_fields", {}):
+                return schema_model.model_validate({"choice": "unclear", "reason": "ambiguous"})
+            if "clarification_question" in getattr(schema_model, "model_fields", {}) and "ambiguous" not in getattr(schema_model, "model_fields", {}):
+                return schema_model.model_validate(
+                    {"clarification_question": "Baseball bat or animal?", "options": ["Baseball bat", "Animal"]}
+                )
+            return RawDetectionResult(
+                ambiguous=True,
+                ambiguities=[{"type": "lexical", "span": "bat", "explanation": "Two meanings."}],
+                interpretations=[
+                    RawInterpretationItem(id="i1", meaning="Baseball bat."),
+                    RawInterpretationItem(id="i2", meaning="Flying mammal."),
+                ],
+                clarification_question="Baseball bat or animal?",
+                options=["Baseball bat", "Animal"],
+            )
+
+    fake_settings = type(
+        "FakeSettings",
+        (),
+        {
+            "llm_provider": "gemini",
+            "model_name": "gemini-3.1-flash-lite",
+            "threshold": 0.7,
+            "n_samples": 5,
+            "temperature_detect": 0.0,
+            "temperature_vote": 0.8,
+            "seed": 42,
+            "interactions_log_path": tmp_path / "stream_interactions.jsonl",
+        },
+    )()
+    monkeypatch.setattr("app.engine.pipeline.default_llm_client", StreamClient())
+    monkeypatch.setattr("app.engine.embeddings.embed_texts", _orthogonal_embed)
+    monkeypatch.setattr("app.engine.pipeline.settings", fake_settings)
+
+    client = TestClient(app)
+    res = client.post("/analyze/stream", json={"sentence": "I saw the bat."})
+    assert res.status_code == 200
+    assert "text/event-stream" in res.headers["content-type"]
+
+    body = res.text
+    assert "event: stage" in body
+    assert "event: vote" in body
+    assert "event: token" in body
+    assert "event: done" in body
+    assert "Baseball bat or animal?" in body
+
+
+
