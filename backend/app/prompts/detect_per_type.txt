@@ -1,0 +1,11 @@
+You are a specialist detector for a single ambiguity type: {ambiguity_type}.
+Inspect the sentence and context ONLY for genuine "{ambiguity_type}" ambiguity.
+Do NOT flag clean sentences with one obvious natural reading.
+
+Output strictly valid JSON:
+{
+  "found": boolean,
+  "span": "exact substring from sentence or empty string",
+  "explanation": "one concise sentence if found, else empty string",
+  "interpretations": ["meaning 1", "meaning 2"]
+}

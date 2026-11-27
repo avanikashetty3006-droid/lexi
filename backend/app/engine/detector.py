@@ -134,3 +134,46 @@ async def detect_ambiguity(
         seed=settings.seed,
     )
     return normalize_detection(sentence, raw)
+
+
+class PerTypeDetectionResult(BaseModel):
+    found: bool
+    span: str = ""
+    explanation: str = ""
+    interpretations: list[str] = Field(default_factory=list)
+
+
+async def detect_by_type(
+    *,
+    ambiguity_type: AmbiguityType,
+    sentence: str,
+    history: list[HistoryMessage],
+    domain: DomainType,
+    clarification: ClarificationInput | None,
+    llm_client: LLMClient | None = None,
+) -> tuple[AmbiguitySpan | None, list[str]]:
+    """Run targeted single-type ambiguity detection from prompts/detect_per_type.txt."""
+    client = llm_client or default_llm_client
+    template = load_prompt("detect_per_type")
+    system_prompt = template.replace("{ambiguity_type}", ambiguity_type)
+    user_prompt = format_detection_payload(sentence, history, domain, clarification)
+    res = await client.call_json(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        temperature=settings.temperature_detect,
+        schema_model=PerTypeDetectionResult,
+        max_tokens=512,
+        seed=settings.seed,
+    )
+    if not res.found or len(res.interpretations) < 2:
+        return None, []
+    matched_span, start, end = locate_span(sentence, res.span.strip())
+    span_obj = AmbiguitySpan(
+        type=ambiguity_type,
+        span=matched_span,
+        start=start,
+        end=end,
+        explanation=res.explanation.strip() or f"Detected {ambiguity_type} ambiguity.",
+    )
+    return span_obj, [item.strip() for item in res.interpretations[:4] if item.strip()]
+

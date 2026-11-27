@@ -60,6 +60,30 @@ class FakeLLMClient:
         payload = json.loads(user_prompt)
         sentence = payload["sentence"]
 
+        # Anaphora resolver request
+        if "resolutions" in getattr(schema_model, "model_fields", {}):
+            pronouns = payload.get("pronouns", [])
+            candidates = payload.get("candidates", ["candidate_a", "candidate_b"])
+            idx = 0 if "Resolver A" in system_prompt else 1
+            chosen = candidates[idx % len(candidates)] if candidates else "unclear"
+            return schema_model.model_validate(
+                {
+                    "resolutions": [
+                        {"pronoun": p, "antecedent": chosen, "confidence": 0.7}
+                        for p in pronouns
+                    ]
+                }
+            )
+
+        # Clarifier request
+        if "clarification_question" in getattr(schema_model, "model_fields", {}) and "ambiguous" not in getattr(schema_model, "model_fields", {}):
+            return schema_model.model_validate(
+                {
+                    "clarification_question": "Which meaning did you intend?",
+                    "options": ["First reading", "Second reading"],
+                }
+            )
+
         # Baseline request
         if "chosen_meaning" in getattr(schema_model, "model_fields", {}):
             item = self._by_sentence.get(sentence, {"ambiguous": False})
@@ -103,6 +127,16 @@ class FakeLLMClient:
         )
 
 
+def _fake_embed(texts: list[str]):
+    import numpy as np
+
+    dim = max(4, len(texts))
+    mat = np.zeros((len(texts), dim), dtype=np.float32)
+    for i in range(len(texts)):
+        mat[i, i % dim] = 1.0
+    return mat
+
+
 def test_locate_span_exact_and_case_insensitive():
     sentence = "Alice told Maya that She failed."
     span, start, end = locate_span(sentence, "she")
@@ -118,12 +152,19 @@ def test_compute_vote_confidence():
 
 
 @pytest.mark.parametrize("case", TEST_SENTENCES, ids=[c["id"] for c in TEST_SENTENCES])
-def test_pipeline_contract_20_sentences(case, monkeypatch):
+def test_pipeline_contract_20_sentences(case):
     import asyncio
 
     fake_client = FakeLLMClient()
     req = AnalyzeRequest(sentence=case["sentence"], threshold=0.7)
-    res: AnalyzeResponse = asyncio.run(analyze_sentence(req, llm_client=fake_client))
+    res: AnalyzeResponse = asyncio.run(
+        analyze_sentence(
+            req,
+            llm_client=fake_client,
+            embed_fn=_fake_embed,
+            enable_logging=False,
+        )
+    )
 
     assert res.sentence == case["sentence"]
     assert res.threshold_used == 0.7
@@ -134,6 +175,7 @@ def test_pipeline_contract_20_sentences(case, monkeypatch):
         assert len(res.interpretations) == 1
         assert res.interpretations[0].id == "i1"
         assert res.interpretations[0].probability == 1.0
+        assert res.uncertainty.semantic_entropy == 0.0
         assert res.needs_clarification is False
         assert res.clarification_question is None
         assert res.options == []
@@ -142,15 +184,35 @@ def test_pipeline_contract_20_sentences(case, monkeypatch):
         span = res.ambiguities[0]
         assert case["sentence"][span.start : span.end] == span.span
         assert len(res.interpretations) >= 2
+        assert res.uncertainty.semantic_entropy > 0.0
+        assert len(res.semantic_map) == len(res.interpretations)
         assert res.needs_clarification is True
         assert res.clarification_question is not None
         assert len(res.options) >= 2
 
 
-def test_fastapi_endpoints_with_mocked_llm(monkeypatch):
+def test_fastapi_endpoints_with_mocked_llm(monkeypatch, tmp_path):
     fake_client = FakeLLMClient()
     monkeypatch.setattr("app.engine.pipeline.default_llm_client", fake_client)
     monkeypatch.setattr("app.engine.baseline.default_llm_client", fake_client)
+    monkeypatch.setattr("app.engine.embeddings.embed_texts", _fake_embed)
+    fake_settings = type(
+        "FakeSettings",
+        (),
+        {
+            "llm_provider": "gemini",
+            "model_name": "gemini-3.1-flash-lite",
+            "threshold": 0.7,
+            "n_samples": 5,
+            "temperature_detect": 0.0,
+            "temperature_vote": 0.8,
+            "seed": 42,
+            "interactions_log_path": tmp_path / "api_interactions.jsonl",
+        },
+    )()
+    monkeypatch.setattr("app.config.settings", fake_settings)
+    monkeypatch.setattr("app.engine.pipeline.settings", fake_settings)
+    monkeypatch.setattr("app.main.settings", fake_settings)
 
     client = TestClient(app)
 
