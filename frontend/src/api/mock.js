@@ -324,10 +324,10 @@ const CHITCHAT_REPLIES = {
   thanks: "You're welcome! Send another sentence anytime.",
   'thank you': "You're welcome! Send another sentence anytime.",
   thx: "You're welcome!",
-  ok: 'Sounds good—send a sentence whenever you are ready.',
-  okay: 'Sounds good—send a sentence whenever you are ready.',
+  ok: 'Sounds goodâ€”send a sentence whenever you are ready.',
+  okay: 'Sounds goodâ€”send a sentence whenever you are ready.',
   yes: 'Got it! Type the next sentence whenever you are ready.',
-  no: 'No problem—let me know what you would like to test next.',
+  no: 'No problemâ€”let me know what you would like to test next.',
   bye: 'Bye! Click "New conversation" anytime to start fresh.',
   goodbye: 'Goodbye! Click "New conversation" anytime to start fresh.',
 };
