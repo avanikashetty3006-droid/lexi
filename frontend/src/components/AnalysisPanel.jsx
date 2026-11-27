@@ -16,6 +16,7 @@ export default function AnalysisPanel({
   threshold,
   overriddenId,
   onSelectInterpretation,
+  onReanalyze,
 }) {
   const [activeTab, setActiveTab] = useState('meanings');
   const activeResolvedId = overriddenId || result?.resolved_interpretation_id;
@@ -124,7 +125,11 @@ export default function AnalysisPanel({
             </div>
           )
         ) : activeTab === 'why' ? (
-          <WhyPanel result={result} threshold={threshold} />
+          <WhyPanel
+            result={result}
+            threshold={threshold}
+            onReanalyze={onReanalyze}
+          />
         ) : (
           <MeaningMap
             points={result.semantic_map}

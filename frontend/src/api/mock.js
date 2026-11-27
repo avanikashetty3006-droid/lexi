@@ -153,6 +153,159 @@ const MOCK_ENTRIES = {
       chosen_meaning: 'Go to a financial bank (e.g., to deposit or withdraw money).',
     },
   },
+  'the system shall respond quickly': {
+    ambiguous: true,
+    confidence: 0.55,
+    ambiguities: [
+      {
+        type: 'semantic',
+        span: 'quickly',
+        start: 25,
+        end: 32,
+        explanation:
+          '"quickly" has no measurable latency target (e.g., <200ms vs <2s) or percentile.',
+      },
+    ],
+    interpretations: [
+      {
+        id: 'i1',
+        meaning: 'Respond in under 200 ms at p95 for interactive UI requests.',
+        probability: 0.55,
+      },
+      {
+        id: 'i2',
+        meaning: 'Respond in under 2 seconds for background/report queries.',
+        probability: 0.45,
+      },
+    ],
+    uncertainty: {
+      vote_split: { i1: 0.55, i2: 0.45 },
+      semantic_entropy: 0.69,
+    },
+    semantic_map: [
+      { id: 'i1', x: -0.58, y: 0.41, label: '<200ms p95' },
+      { id: 'i2', x: 0.61, y: -0.37, label: '<2s query' },
+    ],
+    clarification_question: 'What latency SLA defines "quickly" here?',
+    options: [
+      'Respond in under 200 ms at p95 for interactive UI requests.',
+      'Respond in under 2 seconds for background/report queries.',
+    ],
+    baseline: {
+      ambiguous: false,
+      chosen_meaning: 'Respond in under 200 ms at p95 for interactive UI requests.',
+    },
+  },
+  'users can delete their own records and logs': {
+    ambiguous: true,
+    confidence: 0.6,
+    ambiguities: [
+      {
+        type: 'syntactic',
+        span: 'their own records and logs',
+        start: 17,
+        end: 43,
+        explanation:
+          '"their own" could scope over both records and logs, or only records (allowing deletion of all logs).',
+      },
+    ],
+    interpretations: [
+      {
+        id: 'i1',
+        meaning: 'Users can delete only their own records and their own logs.',
+        probability: 0.6,
+      },
+      {
+        id: 'i2',
+        meaning: 'Users can delete their own records, plus system audit logs.',
+        probability: 0.4,
+      },
+    ],
+    uncertainty: {
+      vote_split: { i1: 0.6, i2: 0.4 },
+      semantic_entropy: 0.67,
+    },
+    semantic_map: [
+      { id: 'i1', x: -0.64, y: 0.3, label: 'Own records + own logs' },
+      { id: 'i2', x: 0.62, y: -0.44, label: 'Own records + all logs' },
+    ],
+    clarification_question: 'Does "their own" apply to logs as well as records?',
+    options: [
+      'Users can delete only their own records and their own logs.',
+      'Users can delete their own records, plus system audit logs.',
+    ],
+    baseline: {
+      ambiguous: false,
+      chosen_meaning:
+        'Users can delete only their own records and their own logs.',
+    },
+  },
+  'the api must return a 200 status within 500 ms': {
+    ambiguous: false,
+    confidence: 1.0,
+    ambiguities: [],
+    interpretations: [
+      {
+        id: 'i1',
+        meaning: 'The API endpoint must return HTTP 200 in 500 ms or less.',
+        probability: 1.0,
+      },
+    ],
+    uncertainty: {
+      vote_split: { i1: 1.0 },
+      semantic_entropy: 0.0,
+    },
+    semantic_map: [{ id: 'i1', x: 0.0, y: 0.0, label: 'HTTP 200 <= 500ms' }],
+    clarification_question: null,
+    options: [],
+    baseline: {
+      ambiguous: false,
+      chosen_meaning: 'The API endpoint must return HTTP 200 in 500 ms or less.',
+    },
+  },
+  'it must notify admins when it fails': {
+    ambiguous: true,
+    confidence: 0.5,
+    ambiguities: [
+      {
+        type: 'anaphoric',
+        span: 'it',
+        start: 27,
+        end: 29,
+        explanation:
+          'The second "it" could refer to the background job, the API gateway, or the notification service.',
+      },
+    ],
+    interpretations: [
+      {
+        id: 'i1',
+        meaning: 'Notify admins when the scheduled job fails.',
+        probability: 0.5,
+      },
+      {
+        id: 'i2',
+        meaning: 'Notify admins when the payment/API request fails.',
+        probability: 0.5,
+      },
+    ],
+    uncertainty: {
+      vote_split: { i1: 0.5, i2: 0.5 },
+      semantic_entropy: 0.69,
+    },
+    semantic_map: [
+      { id: 'i1', x: -0.52, y: 0.5, label: 'Scheduled job fails' },
+      { id: 'i2', x: 0.54, y: -0.48, label: 'API request fails' },
+    ],
+    clarification_question: 'Which component does "when it fails" refer to?',
+    options: [
+      'Notify admins when the scheduled job fails.',
+      'Notify admins when the payment/API request fails.',
+    ],
+    baseline: {
+      ambiguous: false,
+      chosen_meaning: 'Notify admins when the scheduled job fails.',
+    },
+  },
 };
 
 function delay(ms) {

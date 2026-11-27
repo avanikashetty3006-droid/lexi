@@ -193,6 +193,19 @@ export function useConversation() {
     await runAnalyze(lastPayloadRef.current);
   }, [loading, runAnalyze]);
 
+  const reanalyzeWithThreshold = useCallback(async () => {
+    if (!lastSentenceRef.current || loading) return;
+    await runAnalyze(
+      {
+        sentence: lastSentenceRef.current,
+        history: history.slice(-6),
+        domain,
+        threshold,
+      },
+      { fetchBaseline: compareMode }
+    );
+  }, [compareMode, domain, history, loading, runAnalyze, threshold]);
+
   const clearConversation = useCallback(() => {
     stopLoadingSteps();
     lastPayloadRef.current = null;
@@ -228,6 +241,7 @@ export function useConversation() {
     overrideInterpretation,
     recordFeedback,
     retry,
+    reanalyzeWithThreshold,
     clearConversation,
   };
 }

@@ -6,6 +6,7 @@ export default function CompareView({
   threshold,
   overriddenId,
   onSelectInterpretation,
+  onReanalyze,
 }) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 h-full">
@@ -44,6 +45,7 @@ export default function CompareView({
           threshold={threshold}
           overriddenId={overriddenId}
           onSelectInterpretation={onSelectInterpretation}
+          onReanalyze={onReanalyze}
         />
       </div>
     </div>

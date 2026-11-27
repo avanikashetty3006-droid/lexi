@@ -1,14 +1,24 @@
-const EXAMPLES = [
+const GENERAL_EXAMPLES = [
   'I saw her duck',
   'The cat sat on the mat',
   'She told her sister she was late',
   'Visit the bank',
 ];
 
-export default function ExampleChips({ onSelect, disabled }) {
+const REQUIREMENTS_EXAMPLES = [
+  'The system shall respond quickly',
+  'Users can delete their own records and logs',
+  'The API must return a 200 status within 500 ms',
+  'It must notify admins when it fails',
+];
+
+export default function ExampleChips({ domain = 'general', onSelect, disabled }) {
+  const examples =
+    domain === 'requirements' ? REQUIREMENTS_EXAMPLES : GENERAL_EXAMPLES;
+
   return (
     <div className="flex flex-wrap justify-center gap-2.5 max-w-lg mx-auto">
-      {EXAMPLES.map((sentence) => (
+      {examples.map((sentence) => (
         <button
           key={sentence}
           type="button"

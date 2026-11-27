@@ -32,6 +32,7 @@ function MainApp() {
         <div className="h-[78vh] min-h-[460px]">
           <ChatColumn
             messages={conv.messages}
+            domain={conv.domain}
             loading={conv.loading}
             loadingStep={conv.loadingStep}
             error={conv.error}
@@ -51,6 +52,7 @@ function MainApp() {
               threshold={conv.threshold}
               overriddenId={conv.overriddenId}
               onSelectInterpretation={conv.overrideInterpretation}
+              onReanalyze={conv.reanalyzeWithThreshold}
             />
           ) : (
             <AnalysisPanel
@@ -58,6 +60,7 @@ function MainApp() {
               threshold={conv.threshold}
               overriddenId={conv.overriddenId}
               onSelectInterpretation={conv.overrideInterpretation}
+              onReanalyze={conv.reanalyzeWithThreshold}
             />
           )}
         </div>

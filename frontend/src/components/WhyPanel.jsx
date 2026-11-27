@@ -1,10 +1,13 @@
 import ConfidenceBar from './ConfidenceBar';
 
-export default function WhyPanel({ result, threshold }) {
+export default function WhyPanel({ result, threshold, onReanalyze }) {
   const voteSplit = result?.uncertainty?.vote_split || {};
   const entries = Object.entries(voteSplit);
   const entropy = result?.uncertainty?.semantic_entropy;
   const effectiveThreshold = threshold ?? result?.threshold_used ?? 0.7;
+  const thresholdChanged =
+    typeof result?.threshold_used === 'number' &&
+    Math.abs(effectiveThreshold - result.threshold_used) > 0.001;
 
   const topShare =
     entries.length > 0 ? Math.max(...entries.map(([, v]) => Number(v) || 0)) : 0;
@@ -28,12 +31,23 @@ export default function WhyPanel({ result, threshold }) {
           threshold={effectiveThreshold}
         />
         {typeof result?.confidence === 'number' && (
-          <p className="text-xs text-slate">
-            With your current slider ({effectiveThreshold.toFixed(2)}), Lexi{' '}
-            {result.confidence < effectiveThreshold
-              ? 'asks for clarification.'
-              : 'answers directly.'}
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-slate">
+              With your current slider ({effectiveThreshold.toFixed(2)}), Lexi{' '}
+              {result.confidence < effectiveThreshold
+                ? 'asks for clarification.'
+                : 'answers directly.'}
+            </p>
+            {thresholdChanged && onReanalyze && (
+              <button
+                type="button"
+                onClick={onReanalyze}
+                className="text-xs px-2.5 py-1 rounded-lg bg-[#6C5CE7] text-crisp hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-[#14B8A6]"
+              >
+                Re-analyze at {effectiveThreshold.toFixed(2)}
+              </button>
+            )}
+          </div>
         )}
       </div>
 

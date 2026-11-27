@@ -1,4 +1,15 @@
+import { useEffect } from 'react';
+
 export default function AboutModal({ open, onClose }) {
+  useEffect(() => {
+    if (!open) return;
+    const handleKey = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [open, onClose]);
+
   if (!open) return null;
 
   return (
@@ -6,9 +17,13 @@ export default function AboutModal({ open, onClose }) {
       role="dialog"
       aria-modal="true"
       aria-labelledby="about-lexi-title"
+      onClick={onClose}
       className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
     >
-      <div className="w-full max-w-lg bg-panel border border-line rounded-2xl p-6 space-y-5">
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-lg bg-panel border border-line rounded-2xl p-6 space-y-5"
+      >
         <div className="flex items-center justify-between">
           <h2 id="about-lexi-title" className="text-lg font-semibold text-crisp">
             How Lexi works

@@ -3,6 +3,7 @@ import ChatInput from './ChatInput';
 
 export default function ChatColumn({
   messages,
+  domain,
   loading,
   loadingStep,
   error,
@@ -19,6 +20,7 @@ export default function ChatColumn({
     >
       <MessageList
         messages={messages}
+        domain={domain}
         loading={loading}
         loadingStep={loadingStep}
         error={error}

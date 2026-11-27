@@ -5,6 +5,7 @@ import ClarifyPrompt from './ClarifyPrompt';
 
 export default function MessageList({
   messages,
+  domain,
   loading,
   loadingStep,
   error,
@@ -33,7 +34,7 @@ export default function MessageList({
           Type any sentence below or pick an example. Lexi checks for ambiguity
           and asks instead of guessing.
         </p>
-        <ExampleChips onSelect={onSelectExample} disabled={loading} />
+        <ExampleChips domain={domain} onSelect={onSelectExample} disabled={loading} />
       </div>
     );
   }
