@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,8 +20,64 @@ from app.schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
     AmbiguitySpan,
+    Interpretation,
+    SemanticMapPoint,
     UncertaintyInfo,
 )
+
+_CACHE_TTL_SECONDS = 120.0
+_CACHE_MAX_ENTRIES = 64
+
+
+@dataclass
+class _CachedAnalysis:
+    created_at: float
+    ambiguous: bool
+    confidence: float
+    ambiguities: list[AmbiguitySpan]
+    interpretations: list[Interpretation]
+    vote_split: dict[str, float]
+    semantic_entropy: float
+    semantic_map: list[SemanticMapPoint]
+    draft_question: str | None
+    draft_options: list[str]
+    top_id: str | None
+
+
+_ANALYZE_CACHE: dict[str, _CachedAnalysis] = {}
+
+
+def clear_analyze_cache() -> None:
+    """Clear in-memory threshold-reuse analysis cache."""
+    _ANALYZE_CACHE.clear()
+
+
+def _make_cache_key(request: AnalyzeRequest) -> str:
+    payload = {
+        "sentence": request.sentence,
+        "history": [m.model_dump() for m in request.history],
+        "domain": request.domain,
+        "clarification": request.clarification.model_dump() if request.clarification else None,
+        "model": settings.model_name,
+    }
+    return json.dumps(payload, sort_keys=True, ensure_ascii=False)
+
+
+def _get_cached(key: str) -> _CachedAnalysis | None:
+    entry = _ANALYZE_CACHE.get(key)
+    if entry is None:
+        return None
+    if (time.monotonic() - entry.created_at) > _CACHE_TTL_SECONDS:
+        _ANALYZE_CACHE.pop(key, None)
+        return None
+    return entry
+
+
+def _put_cached(key: str, entry: _CachedAnalysis) -> None:
+    if len(_ANALYZE_CACHE) >= _CACHE_MAX_ENTRIES:
+        oldest_key = min(_ANALYZE_CACHE, key=lambda k: _ANALYZE_CACHE[k].created_at)
+        _ANALYZE_CACHE.pop(oldest_key, None)
+    _ANALYZE_CACHE[key] = entry
 
 
 def log_interaction(
@@ -75,10 +132,59 @@ def _merge_anaphora(
             merged_spans,
             merged_interps,
             f"Who or what does '{target_pronoun}' refer to?",
-            [m[:65] for m in ana_meanings[:4]],
+            [m[:50] for m in ana_meanings[:4]],
         )
 
     return True, merged_spans, raw_interps, question, options
+
+
+def _finalize_from_cached(
+    request: AnalyzeRequest,
+    cached: _CachedAnalysis,
+    threshold_used: float,
+    started: float,
+) -> AnalyzeResponse:
+    """Apply threshold decision on cached detection/vote/embedding outputs."""
+    if not cached.ambiguous:
+        needs_clarification = False
+        clarification_question = None
+        final_options: list[str] = []
+        resolved_id: str | None = "i1"
+    else:
+        needs_clarification = cached.confidence < threshold_used
+        if needs_clarification:
+            clarification_question = cached.draft_question
+            final_options = cached.draft_options
+            resolved_id = None
+        else:
+            clarification_question = None
+            final_options = []
+            resolved_id = cached.top_id
+
+    resolution_basis = determine_resolution_basis(
+        request, ambiguous=cached.ambiguous, needs_clarification=needs_clarification
+    )
+    latency_ms = int((time.perf_counter() - started) * 1000)
+
+    return AnalyzeResponse(
+        sentence=request.sentence,
+        ambiguous=cached.ambiguous,
+        confidence=cached.confidence,
+        ambiguities=cached.ambiguities,
+        interpretations=cached.interpretations,
+        uncertainty=UncertaintyInfo(
+            vote_split=cached.vote_split,
+            semantic_entropy=cached.semantic_entropy,
+        ),
+        semantic_map=cached.semantic_map,
+        needs_clarification=needs_clarification,
+        clarification_question=clarification_question,
+        options=final_options,
+        resolved_interpretation_id=resolved_id,
+        resolution_basis=resolution_basis,
+        threshold_used=threshold_used,
+        latency_ms=latency_ms,
+    )
 
 
 async def analyze_sentence(
@@ -87,6 +193,7 @@ async def analyze_sentence(
     embed_fn: EmbedFn | None = None,
     log_path: Path | None = None,
     enable_logging: bool = True,
+    use_cache: bool = True,
 ) -> AnalyzeResponse:
     """Execute full Lexi pipeline: Context -> Detect(+Anaphora) -> Vote -> Embed -> Decide -> Log."""
     started = time.perf_counter()
@@ -94,6 +201,16 @@ async def analyze_sentence(
     threshold_used = (
         request.threshold if request.threshold is not None else settings.threshold
     )
+    cache_allowed = use_cache and isinstance(client, LLMClient) and embed_fn is None
+    cache_key = _make_cache_key(request) if cache_allowed else ""
+
+    if cache_allowed:
+        cached = _get_cached(cache_key)
+        if cached is not None:
+            response = _finalize_from_cached(request, cached, threshold_used, started)
+            if enable_logging:
+                log_interaction(request, response, log_path=log_path)
+            return response
 
     # 1. Explicit clarification resolution path
     if request.clarification is not None:
@@ -173,6 +290,7 @@ async def analyze_sentence(
         ambiguous, ambiguities, raw_interps, question, options = await detect_coro
 
     # 3. Vote + Embed + Decide
+    top_id: str | None = "i1"
     if not ambiguous:
         vote_split = {"i1": 1.0}
         confidence = 1.0
@@ -195,24 +313,48 @@ async def analyze_sentence(
             raw_interps, ambiguous=True, vote_split=vote_split
         )
         needs_clarification = confidence < threshold_used
-        if needs_clarification:
-            clarification_question, final_options = await prepare_clarification(
-                sentence=request.sentence,
-                ambiguities=ambiguities,
-                interpretations=interpretations,
-                draft_question=question,
-                draft_options=options,
-                llm_client=client,
-            )
-            resolved_id = None
-        else:
+        # Prepare clean question/options once so threshold slider changes reuse them immediately
+        clarification_question, final_options = await prepare_clarification(
+            sentence=request.sentence,
+            ambiguities=ambiguities,
+            interpretations=interpretations,
+            draft_question=question,
+            draft_options=options,
+            llm_client=client,
+        )
+        if not needs_clarification:
             clarification_question = None
             final_options = []
             resolved_id = top_id
+        else:
+            resolved_id = None
 
     semantic_entropy, semantic_map = analyze_semantic_space(
         interpretations, embed_fn=embed_fn
     )
+    if cache_allowed:
+        draft_q, draft_opts = (
+            (clarification_question, final_options)
+            if (ambiguous and needs_clarification)
+            else (question, options)
+        )
+        _put_cached(
+            cache_key,
+            _CachedAnalysis(
+                created_at=time.monotonic(),
+                ambiguous=ambiguous,
+                confidence=confidence,
+                ambiguities=ambiguities,
+                interpretations=interpretations,
+                vote_split=vote_split,
+                semantic_entropy=semantic_entropy,
+                semantic_map=semantic_map,
+                draft_question=draft_q,
+                draft_options=draft_opts,
+                top_id=top_id,
+            ),
+        )
+
     resolution_basis = determine_resolution_basis(
         request, ambiguous=ambiguous, needs_clarification=needs_clarification
     )

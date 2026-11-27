@@ -47,4 +47,4 @@ Output strictly valid JSON matching this schema:
 
 Invariants:
 - If "ambiguous" is false: "ambiguities" MUST be [], "interpretations" MUST have exactly 1 item with id "i1", "clarification_question" MUST be null, and "options" MUST be [].
-- If "ambiguous" is true: "ambiguities" MUST have >= 1 item with exact substring "span" from the sentence, "interpretations" MUST have 2 to 4 distinct items ("i1", "i2", ...), "clarification_question" MUST be a non-empty string, and "options" MUST have 2 to 4 short clickable choices corresponding to the interpretations.
+- If "ambiguous" is true: "ambiguities" MUST have >= 1 item with exact substring "span" from the sentence, "interpretations" MUST have 2 to 4 distinct items ("i1", "i2", ...), "clarification_question" MUST be a non-empty string, and "options" MUST have 2 to 4 short clickable choices (under 50 characters each) corresponding to the interpretations.

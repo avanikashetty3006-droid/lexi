@@ -70,17 +70,22 @@ async def run_vote_confidence(
         ensure_ascii=False,
     )
 
-    tasks = [
-        client.call_json(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            temperature=settings.temperature_vote,
-            schema_model=VoteResult,
-            max_tokens=256,
-            seed=settings.seed + i,
-        )
-        for i in range(samples)
-    ]
+    async def _single_vote(idx: int):
+        if idx > 0 and isinstance(client, LLMClient):
+            await asyncio.sleep(0.06 * idx)
+        kwargs = {
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+            "temperature": settings.temperature_vote,
+            "schema_model": VoteResult,
+            "max_tokens": 128,
+            "seed": settings.seed + idx,
+        }
+        if isinstance(client, LLMClient):
+            kwargs["max_retries"] = 1
+        return await client.call_json(**kwargs)
+
+    tasks = [_single_vote(i) for i in range(samples)]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     choices: list[str] = []

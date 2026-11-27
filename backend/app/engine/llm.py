@@ -141,11 +141,13 @@ class LLMClient:
         schema_model: type[T] | None = None,
         max_tokens: int = 1024,
         seed: int | None = None,
+        max_retries: int | None = None,
     ) -> dict[str, Any] | T:
         """Call LLM in JSON mode with retry, Pydantic validation, and backup fallback."""
         last_error: Exception | None = None
         use_backup = False
-        max_attempts = max(self.cfg.llm_max_retries + 2, 4)
+        retries = self.cfg.llm_max_retries if max_retries is None else max_retries
+        max_attempts = max(retries + 1, 2)
 
         for attempt in range(max_attempts):
             try:
@@ -170,13 +172,13 @@ class LLMClient:
                     use_backup = True
                     continue
                 if attempt < max_attempts - 1:
-                    delay = (2.5 * (attempt + 1)) if is_rate_limit else (0.4 * (attempt + 1))
+                    delay = (1.2 * (attempt + 1)) if is_rate_limit else (0.3 * (attempt + 1))
                     await asyncio.sleep(delay)
                     continue
                 break
             except (ValueError, json.JSONDecodeError, ValidationError) as exc:
                 last_error = exc
-                if attempt < self.cfg.llm_max_retries:
+                if attempt < retries:
                     await asyncio.sleep(0.2 * (attempt + 1))
                     continue
                 break
