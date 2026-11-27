@@ -312,25 +312,25 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const CLEAN_CHITCHAT = new Set([
-  'hi',
-  'hello',
-  'hey',
-  'yo',
-  'good morning',
-  'good afternoon',
-  'good evening',
-  'thanks',
-  'thank you',
-  'thx',
-  'ok',
-  'okay',
-  'yes',
-  'no',
-  'bye',
-  'goodbye',
-  'how are you',
-]);
+const CHITCHAT_REPLIES = {
+  hi: "Hi! I'm Lexi. Send me any sentence or requirement and I'll check if it could mean more than one thing.",
+  hello: "Hello! I'm Lexi. Type any sentence to see how I detect and clarify ambiguity.",
+  hey: "Hey! Drop a sentence below and let's test it together.",
+  yo: "Hey! Send a sentence whenever you're ready.",
+  'good morning': 'Good morning! What sentence would you like to check?',
+  'good afternoon': 'Good afternoon! What sentence would you like to check?',
+  'good evening': 'Good evening! What sentence would you like to check?',
+  'how are you': 'Doing great! Ready whenever you have a sentence to test.',
+  thanks: "You're welcome! Send another sentence anytime.",
+  'thank you': "You're welcome! Send another sentence anytime.",
+  thx: "You're welcome!",
+  ok: 'Sounds good—send a sentence whenever you are ready.',
+  okay: 'Sounds good—send a sentence whenever you are ready.',
+  yes: 'Got it! Type the next sentence whenever you are ready.',
+  no: 'No problem—let me know what you would like to test next.',
+  bye: 'Bye! Click "New conversation" anytime to start fresh.',
+  goodbye: 'Goodbye! Click "New conversation" anytime to start fresh.',
+};
 
 function buildCleanMock(sentence, meaning) {
   return {
@@ -348,11 +348,8 @@ function buildCleanMock(sentence, meaning) {
 
 function buildGenericMock(sentence, domain) {
   const normalized = sentence.trim().toLowerCase().replace(/[.!?]+$/, '');
-  if (CLEAN_CHITCHAT.has(normalized)) {
-    return buildCleanMock(
-      sentence,
-      'Casual greeting or conversational acknowledgement.'
-    );
+  if (CHITCHAT_REPLIES[normalized]) {
+    return buildCleanMock(sentence, CHITCHAT_REPLIES[normalized]);
   }
   const words = sentence.trim().split(/\s+/);
   const target = words[words.length - 1]?.replace(/[.,!?]+$/, '') || sentence;

@@ -61,7 +61,10 @@ export function useConversation() {
           (i) => i.id === result.resolved_interpretation_id
         );
 
-        let assistantText = 'No ambiguity found.';
+        let assistantText =
+          resolvedInterp?.meaning ||
+          result.interpretations?.[0]?.meaning ||
+          'Got it.';
         if (result.needs_clarification && result.clarification_question) {
           assistantText = result.clarification_question;
         } else if (result.resolution_basis === 'clarification' && resolvedInterp) {
