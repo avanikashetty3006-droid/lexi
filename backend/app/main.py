@@ -10,6 +10,7 @@ from app.config import settings
 from app.engine.baseline import run_baseline
 from app.engine.embeddings import embed_texts
 from app.engine.pipeline import analyze_sentence
+from app.feedback import router as feedback_router
 from app.schemas import AnalyzeRequest, AnalyzeResponse, BaselineRequest, BaselineResponse
 
 
@@ -22,6 +23,8 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Lexi Ambiguity Engine", version="0.1.0", lifespan=lifespan)
+
+app.include_router(feedback_router)
 
 app.add_middleware(
     CORSMiddleware,
