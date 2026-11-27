@@ -8,8 +8,8 @@ export default function MeaningMap({
   onSelectInterpretation,
 }) {
   const [hoveredId, setHoveredId] = useState(null);
-  const size = 320;
-  const pad = 40;
+  const size = 340;
+  const pad = 48;
   const inner = size - pad * 2;
 
   const toPx = (val) => {
@@ -39,9 +39,9 @@ export default function MeaningMap({
           <>
             <svg
               viewBox={`0 0 ${size} ${size}`}
-              className="w-full max-w-[340px] h-auto"
+              className="w-full max-w-[360px] h-auto"
               role="img"
-              aria-label="2D Meaning Map scatter plot"
+              aria-label="2D Meaning Map scatter plot with X (PCA 1) and Y (PCA 2) axes"
             >
               <line
                 x1={pad}
@@ -68,6 +68,65 @@ export default function MeaningMap({
                 stroke="#2C2C2F"
                 rx="8"
               />
+
+              {/* X-axis ticks (-1, 0, +1) */}
+              {[
+                { val: -1, label: '-1.0' },
+                { val: 0, label: '0' },
+                { val: 1, label: '+1.0' },
+              ].map((tick) => (
+                <text
+                  key={`x-${tick.val}`}
+                  x={toPx(tick.val)}
+                  y={size - pad + 14}
+                  textAnchor="middle"
+                  fill="#708090"
+                  fontSize="9"
+                >
+                  {tick.label}
+                </text>
+              ))}
+
+              {/* Y-axis ticks (+1, 0, -1) */}
+              {[
+                { val: 1, label: '+1.0' },
+                { val: 0, label: '0' },
+                { val: -1, label: '-1.0' },
+              ].map((tick) => (
+                <text
+                  key={`y-${tick.val}`}
+                  x={pad - 7}
+                  y={toPy(tick.val) + 3}
+                  textAnchor="end"
+                  fill="#708090"
+                  fontSize="9"
+                >
+                  {tick.label}
+                </text>
+              ))}
+
+              {/* Axis titles */}
+              <text
+                x={size / 2}
+                y={size - 10}
+                textAnchor="middle"
+                fill="#A1A1AA"
+                fontSize="10"
+                fontWeight="500"
+              >
+                X: Semantic Axis 1 (PCA 1)
+              </text>
+              <text
+                x={14}
+                y={size / 2}
+                textAnchor="middle"
+                fill="#A1A1AA"
+                fontSize="10"
+                fontWeight="500"
+                transform={`rotate(-90 14 ${size / 2})`}
+              >
+                Y: Semantic Axis 2 (PCA 2)
+              </text>
 
               {points.map((pt, idx) => {
                 const cx = toPx(pt.x);
@@ -133,11 +192,17 @@ export default function MeaningMap({
             </svg>
 
             {activePoint && (
-              <div className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-xs text-silver">
-                <span className="font-mono text-crisp uppercase mr-1.5">
-                  {activePoint.id}
+              <div className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-xs text-silver flex items-center justify-between gap-2">
+                <div>
+                  <span className="font-mono text-crisp uppercase mr-1.5">
+                    {activePoint.id}
+                  </span>
+                  {activeInterp?.meaning || activePoint.label}
+                </div>
+                <span className="font-mono text-[11px] text-slate shrink-0">
+                  ({Number(activePoint.x ?? 0).toFixed(2)},{' '}
+                  {Number(activePoint.y ?? 0).toFixed(2)})
                 </span>
-                {activeInterp?.meaning || activePoint.label}
               </div>
             )}
           </>
@@ -145,8 +210,9 @@ export default function MeaningMap({
       </div>
 
       <p className="text-xs text-slate leading-relaxed">
-        Illustrative projection. Each dot is one possible meaning; distance
-        suggests how different they are; axes are arbitrary.
+        2D PCA projection of sentence embeddings (MiniLM): X (PCA 1) shows the
+        primary semantic difference across meanings, Y (PCA 2) shows secondary
+        variation, and distance reflects how different they are.
       </p>
     </div>
   );
