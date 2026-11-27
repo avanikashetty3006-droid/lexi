@@ -43,7 +43,7 @@ Lexi commits to is the same as the gold meaning (`gold_resolved`).
 Uncertainty: 95% percentile bootstrap over rows (1000 resamples, seed 0).
 
 ## 5. Method (reproducible)
-- Dataset: `evaluation/data/dataset.jsonl` (TODO: size, clean share, multi-turn count; copy from `python evaluation\validate_dataset.py`). Split into dev and test. The threshold is tuned on **dev only**; test is run once.
+- Dataset: `evaluation/data/dataset.jsonl` (200 rows: 67 clean (34%), 21 multi-turn; dev=60, test=140; types: lexical=27, syntactic=27, semantic=26, contextual=27, anaphoric=27; from `python evaluation\validate_dataset.py`). Split into dev and test. The threshold is tuned on **dev only**; test is run once.
 - Baseline: one prompt that silently picks a meaning (`POST /baseline`), same model, same rows, never asks.
 - Same settings for both: provider and model recorded in each summary file; temperature 0 (detect, baseline), 0.8 (votes), 5 votes, seed 42.
 - Meaning matching: a system answer is correct if its nearest gold interpretation (MiniLM cosine) is `gold_resolved`. All gold-ambiguous rows are exported to `results/*_review.csv`; TODO: two people fill the human columns, and the scripts re-score with `--rescore`. Report how many cells changed.
@@ -63,8 +63,8 @@ Study: within-subjects, see `evaluation/study/protocol.md`. TODO: results. Call 
 
 ## 9. Problem 5 (lite)
 Lexi embeds the candidate meanings with all-MiniLM-L6-v2 and draws a 2D PCA "meaning map". This is a **visualizer, not a steerable embedding model**; we do not claim to solve problem 5.
-Faithfulness: with 3 points a 2D projection is exact, so it proves nothing. TODO: report explained variance for 4-point cases and the correlation between 2D distances and cosine distances over many sentences. The PCA axes are recomputed per sentence, so positions cannot be compared across sentences.
-Cosine clustering threshold: TODO say how it was chosen (and that it was not chosen on test rows).
+Faithfulness: with 3 points a 2D projection is exact, so it proves nothing. On 5 logged 3-interpretation dev cases (`n_pairs=15` pairs), 2D Euclidean vs. MiniLM cosine distance correlation was `r = 0.9818`; TODO: report explained variance for 4-point cases and full-split distance correlation once DEV/TEST runs complete. The PCA axes are recomputed per sentence, so positions cannot be compared across sentences.
+Cosine clustering threshold: set to `0.975` using non-test development paraphrases (syntactic paraphrases scored `0.89–0.91` cosine similarity and single-name anaphoric paraphrases scored `0.968` on `all-MiniLM-L6-v2`, so lower thresholds collapsed distinct meanings into one cluster with 0 entropy; not chosen on test rows).
 
 ## 10. Limitations
 - Gemini and Groq ignore our seed; runs can vary slightly. We pin the model name and report it.
