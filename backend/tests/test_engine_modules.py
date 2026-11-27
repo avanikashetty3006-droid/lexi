@@ -378,4 +378,118 @@ def test_analyze_stream_sse_events(monkeypatch, tmp_path):
     assert "Baseball bat or animal?" in body
 
 
+def test_greeting_fast_path_zero_llm_calls():
+    class FailIfCalledClient:
+        async def call_json(self, **kwargs):
+            raise AssertionError("LLM should not be called for trivial greetings!")
+
+    for text in ["hey", "Hello!", "thanks", "Good morning!"]:
+        res = asyncio.run(
+            analyze_sentence(
+                AnalyzeRequest(sentence=text),
+                llm_client=FailIfCalledClient(),
+                enable_logging=False,
+            )
+        )
+        assert res.ambiguous is False
+        assert res.confidence == 1.0
+        assert res.needs_clarification is False
+        assert res.ambiguities == []
+        assert res.uncertainty.semantic_entropy == 0.0
+        assert res.latency_ms < 50
+
+
+def test_clarifier_skipped_when_confident():
+    long_opt = "A" * 110
+
+    class ConfidentClient:
+        async def call_json(self, *, schema_model=None, **kwargs):
+            if "choice" in getattr(schema_model, "model_fields", {}):
+                return schema_model.model_validate({"choice": "i1", "reason": "clear winner"})
+            if "clarification_question" in getattr(schema_model, "model_fields", {}) and "ambiguous" not in getattr(schema_model, "model_fields", {}):
+                raise AssertionError("prepare_clarification should not call LLM when confidence >= threshold!")
+            return RawDetectionResult(
+                ambiguous=True,
+                ambiguities=[{"type": "lexical", "span": "bat", "explanation": "Two meanings."}],
+                interpretations=[
+                    RawInterpretationItem(id="i1", meaning="Baseball bat."),
+                    RawInterpretationItem(id="i2", meaning="Flying mammal."),
+                ],
+                clarification_question="Which one?",
+                options=[long_opt, "Short option"],
+            )
+
+    res = asyncio.run(
+        analyze_sentence(
+            AnalyzeRequest(sentence="I saw the bat.", threshold=0.7),
+            llm_client=ConfidentClient(),
+            embed_fn=_orthogonal_embed,
+            enable_logging=False,
+        )
+    )
+    assert res.confidence == 1.0
+    assert res.needs_clarification is False
+    assert res.resolved_interpretation_id == "i1"
+
+
+def test_incremental_stream_tokens_clean_response(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+    from app.engine.llm import IncrementalMeaningExtractor
+    from app.main import app
+
+    ext = IncrementalMeaningExtractor()
+    chunks = [
+        '{"ambiguous": false, ',
+        '"ambiguities": [], ',
+        '"interpretations": [{"id": "i1", "meaning": "Hello! ',
+        'How can I help?"}], ',
+        '"clarification_question": null, "options": []}',
+    ]
+    out = [ext.feed(c) for c in chunks]
+    assert "".join(out) == "Hello! How can I help?"
+    assert out[2] == "Hello! "
+    assert out[3] == "How can I help?"
+
+    class IncrementalStreamClient:
+        async def stream_json(self, *, schema_model=None, **kwargs):
+            for c in chunks:
+                yield ("chunk", c)
+            yield (
+                "result",
+                RawDetectionResult(
+                    ambiguous=False,
+                    ambiguities=[],
+                    interpretations=[RawInterpretationItem(id="i1", meaning="Hello! How can I help?")],
+                    clarification_question=None,
+                    options=[],
+                ),
+            )
+
+    fake_settings = type(
+        "FakeSettings",
+        (),
+        {
+            "llm_provider": "gemini",
+            "model_name": "gemini-3.1-flash-lite",
+            "threshold": 0.7,
+            "n_samples": 5,
+            "temperature_detect": 0.0,
+            "temperature_vote": 0.8,
+            "seed": 42,
+            "interactions_log_path": tmp_path / "inc_stream.jsonl",
+        },
+    )()
+    monkeypatch.setattr("app.engine.pipeline.default_llm_client", IncrementalStreamClient())
+    monkeypatch.setattr("app.engine.pipeline.settings", fake_settings)
+
+    client = TestClient(app)
+    res = client.post("/analyze/stream", json={"sentence": "Explain binary search briefly."})
+    assert res.status_code == 200
+    assert res.text.count("event: token") == 2
+    assert '"Hello! "' in res.text
+    assert '"How can I help?"' in res.text
+    assert res.text.count("How can I help?") == 4  # 1 token + 1 detected + 2 in done (interp + map)
+
+
+
 

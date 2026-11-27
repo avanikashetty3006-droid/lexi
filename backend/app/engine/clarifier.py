@@ -16,7 +16,7 @@ class ClarifierOutput(BaseModel):
 def _needs_option_refinement(question: str | None, options: list[str]) -> bool:
     if not question or len(options) < 2:
         return True
-    return any(len(opt) > 70 for opt in options)
+    return any(len(opt) > 90 for opt in options)
 
 
 async def prepare_clarification(

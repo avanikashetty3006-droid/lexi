@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -12,7 +13,11 @@ from app.engine.anaphora import detect_anaphora, has_anaphora_candidates
 from app.engine.clarifier import prepare_clarification
 from app.engine.confidence import run_vote_confidence
 from app.engine.context import determine_resolution_basis, resolve_clarification
-from app.engine.detector import RawInterpretationItem, detect_ambiguity
+from app.engine.detector import (
+    RawInterpretationItem,
+    detect_ambiguity,
+    stream_detect_ambiguity,
+)
 from app.engine.embeddings import EmbedFn, analyze_semantic_space
 from app.engine.interpreter import build_interpretations
 from app.engine.llm import LLMClient, default_llm_client
@@ -27,6 +32,39 @@ from app.schemas import (
 
 _CACHE_TTL_SECONDS = 120.0
 _CACHE_MAX_ENTRIES = 64
+
+_GREETING_PUNCT_RE = re.compile(r"[!.,?]+$")
+_GREETING_GROUPS: list[tuple[set[str], str]] = [
+    (
+        {
+            "hi",
+            "hey",
+            "hello",
+            "hii",
+            "heya",
+            "hi there",
+            "hello there",
+            "hey there",
+            "good morning",
+            "good afternoon",
+            "good evening",
+            "gm",
+        },
+        "Hi there! How can I help you today?",
+    ),
+    (
+        {"how are you", "how are you doing", "whats up", "what's up", "sup"},
+        "I'm doing great, thanks for asking! What would you like to check or chat about?",
+    ),
+    (
+        {"thanks", "thank you", "thx", "ty", "thank u"},
+        "You're welcome! Let me know if you need anything else.",
+    ),
+    (
+        {"bye", "goodbye", "see you", "cya"},
+        "Goodbye! Feel free to come back anytime.",
+    ),
+]
 
 
 @dataclass
@@ -50,6 +88,50 @@ _ANALYZE_CACHE: dict[str, _CachedAnalysis] = {}
 def clear_analyze_cache() -> None:
     """Clear in-memory threshold-reuse analysis cache."""
     _ANALYZE_CACHE.clear()
+
+
+def match_greeting_reply(request: AnalyzeRequest) -> str | None:
+    """Return an instant conversational reply for trivial unambiguous greetings/courtesies."""
+    if request.clarification is not None:
+        return None
+    normalized = _GREETING_PUNCT_RE.sub("", request.sentence.strip().lower()).strip()
+    for phrases, reply in _GREETING_GROUPS:
+        if normalized in phrases:
+            return reply
+    return None
+
+
+def _build_clean_response(
+    *,
+    request: AnalyzeRequest,
+    meaning: str,
+    threshold_used: float,
+    started: float,
+    resolution_basis: str = "none",
+    embed_fn: EmbedFn | None = None,
+) -> AnalyzeResponse:
+    """Construct a contract-compliant clean AnalyzeResponse."""
+    raw_interps = [RawInterpretationItem(id="i1", meaning=meaning)]
+    vote_split = {"i1": 1.0}
+    interpretations = build_interpretations(raw_interps, ambiguous=False, vote_split=vote_split)
+    semantic_entropy, semantic_map = analyze_semantic_space(interpretations, embed_fn=embed_fn)
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    return AnalyzeResponse(
+        sentence=request.sentence,
+        ambiguous=False,
+        confidence=1.0,
+        ambiguities=[],
+        interpretations=interpretations,
+        uncertainty=UncertaintyInfo(vote_split=vote_split, semantic_entropy=semantic_entropy),
+        semantic_map=semantic_map,
+        needs_clarification=False,
+        clarification_question=None,
+        options=[],
+        resolved_interpretation_id="i1",
+        resolution_basis=resolution_basis,  # type: ignore[arg-type]
+        threshold_used=threshold_used,
+        latency_ms=latency_ms,
+    )
 
 
 def _make_cache_key(request: AnalyzeRequest) -> str:
@@ -195,12 +277,27 @@ async def analyze_sentence(
     enable_logging: bool = True,
     use_cache: bool = True,
 ) -> AnalyzeResponse:
-    """Execute full Lexi pipeline: Context -> Detect(+Anaphora) -> Vote -> Embed -> Decide -> Log."""
+    """Execute full Lexi pipeline: FastPath -> Cache -> Context -> Detect(+Anaphora) -> Vote -> Embed -> Decide -> Log."""
     started = time.perf_counter()
     client = llm_client or default_llm_client
     threshold_used = (
         request.threshold if request.threshold is not None else settings.threshold
     )
+
+    greeting_reply = match_greeting_reply(request)
+    if greeting_reply is not None:
+        response = _build_clean_response(
+            request=request,
+            meaning=greeting_reply,
+            threshold_used=threshold_used,
+            started=started,
+            resolution_basis="none",
+            embed_fn=embed_fn,
+        )
+        if enable_logging:
+            log_interaction(request, response, log_path=log_path)
+        return response
+
     cache_allowed = use_cache and isinstance(client, LLMClient) and embed_fn is None
     cache_key = _make_cache_key(request) if cache_allowed else ""
 
@@ -221,35 +318,13 @@ async def analyze_sentence(
             llm_client=client,
         )
         if ctx_res.resolved and ctx_res.resolved_meaning.strip():
-            raw_interps = [
-                RawInterpretationItem(id="i1", meaning=ctx_res.resolved_meaning.strip())
-            ]
-            vote_split = {"i1": 1.0}
-            interpretations = build_interpretations(
-                raw_interps, ambiguous=False, vote_split=vote_split
-            )
-            semantic_entropy, semantic_map = analyze_semantic_space(
-                interpretations, embed_fn=embed_fn
-            )
-            latency_ms = int((time.perf_counter() - started) * 1000)
-            response = AnalyzeResponse(
-                sentence=request.sentence,
-                ambiguous=False,
-                confidence=1.0,
-                ambiguities=[],
-                interpretations=interpretations,
-                uncertainty=UncertaintyInfo(
-                    vote_split=vote_split,
-                    semantic_entropy=semantic_entropy,
-                ),
-                semantic_map=semantic_map,
-                needs_clarification=False,
-                clarification_question=None,
-                options=[],
-                resolved_interpretation_id="i1",
-                resolution_basis="clarification",
+            response = _build_clean_response(
+                request=request,
+                meaning=ctx_res.resolved_meaning.strip(),
                 threshold_used=threshold_used,
-                latency_ms=latency_ms,
+                started=started,
+                resolution_basis="clarification",
+                embed_fn=embed_fn,
             )
             if enable_logging:
                 log_interaction(request, response, log_path=log_path)
@@ -313,21 +388,20 @@ async def analyze_sentence(
             raw_interps, ambiguous=True, vote_split=vote_split
         )
         needs_clarification = confidence < threshold_used
-        # Prepare clean question/options once so threshold slider changes reuse them immediately
-        clarification_question, final_options = await prepare_clarification(
-            sentence=request.sentence,
-            ambiguities=ambiguities,
-            interpretations=interpretations,
-            draft_question=question,
-            draft_options=options,
-            llm_client=client,
-        )
-        if not needs_clarification:
+        if needs_clarification:
+            clarification_question, final_options = await prepare_clarification(
+                sentence=request.sentence,
+                ambiguities=ambiguities,
+                interpretations=interpretations,
+                draft_question=question,
+                draft_options=options,
+                llm_client=client,
+            )
+            resolved_id = None
+        else:
             clarification_question = None
             final_options = []
             resolved_id = top_id
-        else:
-            resolved_id = None
 
     semantic_entropy, semantic_map = analyze_semantic_space(
         interpretations, embed_fn=embed_fn
@@ -409,14 +483,33 @@ async def stream_analyze_sentence(
     use_cache: bool = True,
 ):
     """
-    Async generator streaming real-time SSE progress (`stage`, `vote`), assistant
-    response chunks (`token`), and the final validated `AnalyzeResponse` (`done`).
+    Async generator streaming real-time SSE progress (`stage`, `vote`), live
+    incremental response tokens (`token`), and the final validated `AnalyzeResponse` (`done`).
     """
     started = time.perf_counter()
     client = llm_client or default_llm_client
     threshold_used = (
         request.threshold if request.threshold is not None else settings.threshold
     )
+
+    greeting_reply = match_greeting_reply(request)
+    if greeting_reply is not None:
+        yield format_sse("stage", {"step": "detected", "ambiguous": False, "ambiguities": [], "interpretations": [{"id": "i1", "meaning": greeting_reply}]})
+        for idx, word in enumerate(greeting_reply.split(" ")):
+            yield format_sse("token", {"text": ("" if idx == 0 else " ") + word})
+        response = _build_clean_response(
+            request=request,
+            meaning=greeting_reply,
+            threshold_used=threshold_used,
+            started=started,
+            resolution_basis="none",
+            embed_fn=embed_fn,
+        )
+        if enable_logging:
+            log_interaction(request, response, log_path=log_path)
+        yield format_sse("done", response.model_dump())
+        return
+
     cache_allowed = use_cache and isinstance(client, LLMClient) and embed_fn is None
     cache_key = _make_cache_key(request) if cache_allowed else ""
 
@@ -443,33 +536,13 @@ async def stream_analyze_sentence(
                 llm_client=client,
             )
             if ctx_res.resolved and ctx_res.resolved_meaning.strip():
-                raw_interps = [
-                    RawInterpretationItem(id="i1", meaning=ctx_res.resolved_meaning.strip())
-                ]
-                interpretations = build_interpretations(
-                    raw_interps, ambiguous=False, vote_split={"i1": 1.0}
-                )
-                semantic_entropy, semantic_map = analyze_semantic_space(
-                    interpretations, embed_fn=embed_fn
-                )
-                latency_ms = int((time.perf_counter() - started) * 1000)
-                response = AnalyzeResponse(
-                    sentence=request.sentence,
-                    ambiguous=False,
-                    confidence=1.0,
-                    ambiguities=[],
-                    interpretations=interpretations,
-                    uncertainty=UncertaintyInfo(
-                        vote_split={"i1": 1.0}, semantic_entropy=semantic_entropy
-                    ),
-                    semantic_map=semantic_map,
-                    needs_clarification=False,
-                    clarification_question=None,
-                    options=[],
-                    resolved_interpretation_id="i1",
-                    resolution_basis="clarification",
+                response = _build_clean_response(
+                    request=request,
+                    meaning=ctx_res.resolved_meaning.strip(),
                     threshold_used=threshold_used,
-                    latency_ms=latency_ms,
+                    started=started,
+                    resolution_basis="clarification",
+                    embed_fn=embed_fn,
                 )
                 for idx, word in enumerate(_extract_reply_text(response).split(" ")):
                     yield format_sse("token", {"text": ("" if idx == 0 else " ") + word})
@@ -479,19 +552,20 @@ async def stream_analyze_sentence(
                 return
 
         run_anaphora = has_anaphora_candidates(request.sentence, request.history)
-        detect_coro = detect_ambiguity(
-            sentence=request.sentence,
-            history=request.history,
-            domain=request.domain,
-            clarification=request.clarification,
-            llm_client=client,
-        )
+        streamed_text_parts: list[str] = []
+
         if run_anaphora:
             (
                 (ambiguous, ambiguities, raw_interps, question, options),
                 (ana_ambiguous, ana_spans, ana_meanings),
             ) = await asyncio.gather(
-                detect_coro,
+                detect_ambiguity(
+                    sentence=request.sentence,
+                    history=request.history,
+                    domain=request.domain,
+                    clarification=request.clarification,
+                    llm_client=client,
+                ),
                 detect_anaphora(
                     sentence=request.sentence,
                     history=request.history,
@@ -509,7 +583,20 @@ async def stream_analyze_sentence(
                 ana_meanings=ana_meanings,
             )
         else:
-            ambiguous, ambiguities, raw_interps, question, options = await detect_coro
+            det_result = None
+            async for evt, payload in stream_detect_ambiguity(
+                sentence=request.sentence,
+                history=request.history,
+                domain=request.domain,
+                clarification=request.clarification,
+                llm_client=client,
+            ):
+                if evt == "token":
+                    streamed_text_parts.append(payload)
+                    yield format_sse("token", {"text": payload})
+                elif evt == "result":
+                    det_result = payload
+            ambiguous, ambiguities, raw_interps, question, options = det_result
 
         yield format_sse(
             "stage",
@@ -567,20 +654,20 @@ async def stream_analyze_sentence(
                 raw_interps, ambiguous=True, vote_split=vote_split
             )
             needs_clarification = confidence < threshold_used
-            clarification_question, final_options = await prepare_clarification(
-                sentence=request.sentence,
-                ambiguities=ambiguities,
-                interpretations=interpretations,
-                draft_question=question,
-                draft_options=options,
-                llm_client=client,
-            )
-            if not needs_clarification:
+            if needs_clarification:
+                clarification_question, final_options = await prepare_clarification(
+                    sentence=request.sentence,
+                    ambiguities=ambiguities,
+                    interpretations=interpretations,
+                    draft_question=question,
+                    draft_options=options,
+                    llm_client=client,
+                )
+                resolved_id = None
+            else:
                 clarification_question = None
                 final_options = []
                 resolved_id = top_id
-            else:
-                resolved_id = None
 
         semantic_entropy, semantic_map = analyze_semantic_space(
             interpretations, embed_fn=embed_fn
@@ -632,11 +719,16 @@ async def stream_analyze_sentence(
             threshold_used=threshold_used,
             latency_ms=latency_ms,
         )
-        for idx, word in enumerate(_extract_reply_text(response).split(" ")):
-            yield format_sse("token", {"text": ("" if idx == 0 else " ") + word})
+        already_streamed = "".join(streamed_text_parts)
+        reply_text = _extract_reply_text(response)
+        if not already_streamed:
+            for idx, word in enumerate(reply_text.split(" ")):
+                yield format_sse("token", {"text": ("" if idx == 0 else " ") + word})
+        elif len(reply_text) > len(already_streamed) and reply_text.startswith(already_streamed):
+            yield format_sse("token", {"text": reply_text[len(already_streamed) :]})
+
         if enable_logging:
             log_interaction(request, response, log_path=log_path)
         yield format_sse("done", response.model_dump())
     except Exception as exc:
         yield format_sse("error", {"detail": str(exc)})
-

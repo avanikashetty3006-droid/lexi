@@ -133,6 +133,9 @@ def analyze_semantic_space(
     """
     if not interpretations:
         return 0.0, []
+    if len(interpretations) == 1:
+        only = interpretations[0]
+        return 0.0, [SemanticMapPoint(id=only.id, x=0.0, y=0.0, label=only.meaning)]
 
     texts = [item.meaning for item in interpretations]
     weights = [item.probability for item in interpretations]

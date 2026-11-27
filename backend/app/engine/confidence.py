@@ -73,13 +73,13 @@ async def run_vote_confidence(
 
     async def _single_vote(idx: int):
         if idx > 0 and isinstance(client, LLMClient):
-            await asyncio.sleep(0.06 * idx)
+            await asyncio.sleep(0.02 * idx)
         kwargs = {
             "system_prompt": system_prompt,
             "user_prompt": user_prompt,
             "temperature": settings.temperature_vote,
             "schema_model": VoteResult,
-            "max_tokens": 128,
+            "max_tokens": 80,
             "seed": settings.seed + idx,
         }
         if isinstance(client, LLMClient):
