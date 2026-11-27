@@ -1,0 +1,160 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import re
+from functools import lru_cache
+from typing import Any, TypeVar
+
+from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI, RateLimitError
+from pydantic import BaseModel, ValidationError
+
+from app.config import Settings, settings
+
+T = TypeVar("T", bound=BaseModel)
+
+_CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.MULTILINE)
+
+
+@lru_cache(maxsize=32)
+def load_prompt(name: str) -> str:
+    """Load a prompt template from backend/app/prompts/<name>.txt."""
+    path = settings.prompts_dir / f"{name}.txt"
+    if not path.exists():
+        raise FileNotFoundError(f"Prompt file not found: {path}")
+    return path.read_text(encoding="utf-8").strip()
+
+
+def extract_json_object(raw_text: str) -> dict[str, Any]:
+    """Parse a JSON object from raw LLM output, stripping markdown fences if needed."""
+    cleaned = _CODE_FENCE_RE.sub("", raw_text).strip()
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start == -1 or end <= start:
+            raise ValueError(f"LLM response did not contain a JSON object: {raw_text[:200]}")
+        parsed = json.loads(cleaned[start : end + 1])
+
+    if not isinstance(parsed, dict):
+        raise ValueError(f"Expected JSON object, got {type(parsed).__name__}")
+    return parsed
+
+
+class LLMClient:
+    """Async OpenAI-compatible JSON LLM client with retry and backup-provider fallback."""
+
+    def __init__(self, cfg: Settings | None = None) -> None:
+        self.cfg = cfg or settings
+        self._primary_client: AsyncOpenAI | None = None
+        self._backup_client: AsyncOpenAI | None = None
+
+    def _get_client(self, use_backup: bool = False) -> tuple[AsyncOpenAI, str, str]:
+        if use_backup:
+            if not self.cfg.backup_api_key:
+                raise RuntimeError("Backup LLM API key is not configured.")
+            if self._backup_client is None:
+                self._backup_client = AsyncOpenAI(
+                    api_key=self.cfg.backup_api_key,
+                    base_url=self.cfg.backup_base_url,
+                    timeout=self.cfg.llm_timeout_seconds,
+                )
+            return self._backup_client, self.cfg.backup_model, self.cfg.backup_provider
+
+        if not self.cfg.api_key:
+            raise RuntimeError(
+                f"API key missing for provider '{self.cfg.llm_provider}'. "
+                "Set GEMINI_API_KEY (or GROQ_API_KEY / OPENAI_API_KEY) in .env."
+            )
+        if self._primary_client is None:
+            self._primary_client = AsyncOpenAI(
+                api_key=self.cfg.api_key,
+                base_url=self.cfg.base_url,
+                timeout=self.cfg.llm_timeout_seconds,
+            )
+        return self._primary_client, self.cfg.model_name, self.cfg.llm_provider
+
+    async def _request_once(
+        self,
+        *,
+        use_backup: bool,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float,
+        max_tokens: int,
+        seed: int | None,
+    ) -> str:
+        client, model, provider = self._get_client(use_backup=use_backup)
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "response_format": {"type": "json_object"},
+        }
+        if provider == "gemini":
+            kwargs["reasoning_effort"] = "minimal"
+        if seed is not None and provider == "openai":
+            kwargs["seed"] = seed
+
+        response = await client.chat.completions.create(**kwargs)
+        content = response.choices[0].message.content
+        if not content:
+            raise ValueError("Empty response from LLM.")
+        return content
+
+    async def call_json(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.0,
+        schema_model: type[T] | None = None,
+        max_tokens: int = 1024,
+        seed: int | None = None,
+    ) -> dict[str, Any] | T:
+        """Call LLM in JSON mode with retry, Pydantic validation, and backup fallback."""
+        last_error: Exception | None = None
+        use_backup = False
+
+        for attempt in range(self.cfg.llm_max_retries + 2):
+            try:
+                raw = await self._request_once(
+                    use_backup=use_backup,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    seed=seed,
+                )
+                data = extract_json_object(raw)
+                if schema_model is not None:
+                    return schema_model.model_validate(data)
+                return data
+            except (RateLimitError, APITimeoutError, APIConnectionError, APIStatusError) as exc:
+                last_error = exc
+                is_rate_limit = isinstance(exc, RateLimitError) or (
+                    isinstance(exc, APIStatusError) and exc.status_code == 429
+                )
+                if is_rate_limit and not use_backup and self.cfg.backup_api_key:
+                    use_backup = True
+                    continue
+                if attempt < self.cfg.llm_max_retries:
+                    await asyncio.sleep(0.4 * (attempt + 1))
+                    continue
+                break
+            except (ValueError, json.JSONDecodeError, ValidationError) as exc:
+                last_error = exc
+                if attempt < self.cfg.llm_max_retries:
+                    await asyncio.sleep(0.2 * (attempt + 1))
+                    continue
+                break
+
+        raise RuntimeError(f"LLM JSON call failed after retries: {last_error}") from last_error
+
+
+default_llm_client = LLMClient()
