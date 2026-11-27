@@ -59,6 +59,4 @@ def determine_resolution_basis(
         return "context"
     if request.clarification is not None:
         return "clarification"
-    if request.history:
-        return "context"
     return "none"
