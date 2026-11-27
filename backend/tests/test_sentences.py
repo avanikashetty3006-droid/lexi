@@ -37,7 +37,7 @@ TEST_SENTENCES = [
     {"id": "ctx_3", "sentence": "The system should handle large uploads.", "ambiguous": True, "type": "contextual", "span": "large uploads"},
     # Anaphoric (3)
     {"id": "ana_1", "sentence": "Alice told Maya that she failed the exam.", "ambiguous": True, "type": "anaphoric", "span": "she"},
-    {"id": "ana_2", "sentence": "The trophy didn't fit in the suitcase because it was too big.", "ambiguous": True, "type": "anaphoric", "span": "it"},
+    {"id": "ana_2", "sentence": "The server crashed the database after it was upgraded.", "ambiguous": True, "type": "anaphoric", "span": "it"},
     {"id": "ana_3", "sentence": "When the manager met the intern, he smiled nervously.", "ambiguous": True, "type": "anaphoric", "span": "he"},
     # Clean / Unambiguous (5)
     {"id": "cln_1", "sentence": "She deposited the check at the bank before closing.", "ambiguous": False, "type": None, "span": ""},

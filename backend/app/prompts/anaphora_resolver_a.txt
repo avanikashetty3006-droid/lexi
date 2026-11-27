@@ -3,6 +3,7 @@ Given a sentence, optional conversation history, extracted pronouns, and candida
 
 Rules:
 - Choose ONLY from the provided candidate antecedents for each pronoun, OR output "unclear" if the pronoun cannot be confidently bound to one candidate.
+- If physical world knowledge clearly rules out all other candidates (e.g., "The trophy didn't fit in the suitcase because it was too big" -> "The trophy"), choose that single clear antecedent rather than "unclear".
 - Do NOT guess randomly when two candidates fit equally well; output "unclear".
 - Output strictly valid JSON:
 {
