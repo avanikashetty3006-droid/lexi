@@ -17,7 +17,7 @@ _STOPWORDS = {
     "the", "and", "for", "with", "that", "this", "from", "into", "your",
     "you", "did", "mean", "are", "was", "were", "has", "had", "have",
     "saw", "see", "got", "resolved", "answer", "context", "earlier",
-    "talking", "about", "something", "her", "his", "she", "him", "they",
+    "talking", "about", "something", "same", "her", "his", "she", "him", "they",
     "them", "their", "its", "not", "can", "will", "would", "could",
 }
 

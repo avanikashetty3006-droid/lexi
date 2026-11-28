@@ -668,11 +668,11 @@ def test_cached_clarification_option_fast_path(monkeypatch):
                 sentence="I saw a bat.",
                 history=[
                     HistoryMessage(role="user", content="I saw a bat."),
-                    HistoryMessage(role="assistant", content="Animal or sports equipment?"),
+                    HistoryMessage(content="Animal or sports equipment?", role="assistant"),
                 ],
                 clarification=ClarificationInput(
                     question="Animal or sports equipment?",
-                    answer="Animal bat",
+                    answer="Sports bat",
                 ),
             ),
             llm_client=client,
@@ -683,7 +683,75 @@ def test_cached_clarification_option_fast_path(monkeypatch):
     assert resolved.ambiguous is False
     assert resolved.confidence == 1.0
     assert resolved.resolution_basis == "clarification"
-    assert resolved.interpretations[0].meaning == "I saw a flying mammal."
+    assert resolved.interpretations[0].meaning == "I saw a sports bat."
+
+
+def test_reversed_clarification_options_never_pick_wrong_meaning(monkeypatch):
+    from app.engine.llm import LLMClient
+    from app.engine.pipeline import clear_analyze_cache
+
+    clear_analyze_cache()
+    monkeypatch.setattr("app.engine.embeddings.embed_texts", _orthogonal_embed)
+
+    class ReversedOptionClient(LLMClient):
+        async def _request_once(self, *, system_prompt: str, user_prompt: str, **kwargs) -> str:
+            if "semantic evaluator" in system_prompt:
+                return json.dumps({"choice": "unclear", "reason": "ambiguous"})
+            if "clarification and/or" in system_prompt.lower() or "resolved_meaning" in system_prompt.lower():
+                return json.dumps(
+                    {
+                        "resolved": True,
+                        "resolved_meaning": "I saw her lower her head.",
+                        "matched_option_index": 1,
+                    }
+                )
+            return json.dumps(
+                {
+                    "ambiguous": True,
+                    "ambiguities": [
+                        {"type": "lexical", "span": "duck", "explanation": "Bird or action."}
+                    ],
+                    "interpretations": [
+                        {"id": "i1", "meaning": "I saw her lower her head."},
+                        {"id": "i2", "meaning": "I saw her bird, a duck."},
+                    ],
+                    "clarification_question": "Did you mean the bird or the action of lowering her head?",
+                    "options": ["It was a bird", "It was an action"],
+                }
+            )
+
+    client = ReversedOptionClient()
+    first = asyncio.run(
+        analyze_sentence(
+            AnalyzeRequest(sentence="i saw her duck."),
+            llm_client=client,
+            enable_logging=False,
+        )
+    )
+    assert first.needs_clarification is True
+
+    resolved = asyncio.run(
+        analyze_sentence(
+            AnalyzeRequest(
+                sentence="i saw her duck.",
+                history=[
+                    HistoryMessage(role="user", content="i saw her duck."),
+                    HistoryMessage(
+                        role="assistant",
+                        content="Did you mean the bird or the action of lowering her head?",
+                    ),
+                ],
+                clarification=ClarificationInput(
+                    question="Did you mean the bird or the action of lowering her head?",
+                    answer="It was an action",
+                ),
+            ),
+            llm_client=client,
+            enable_logging=False,
+        )
+    )
+    assert resolved.ambiguous is False
+    assert resolved.interpretations[0].meaning == "I saw her lower her head."
 
 
 def test_clarifier_reminds_user_of_earlier_resolved_meaning():

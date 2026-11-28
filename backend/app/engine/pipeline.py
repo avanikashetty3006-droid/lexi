@@ -10,7 +10,7 @@ from pathlib import Path
 
 from app.config import settings
 from app.engine.anaphora import detect_anaphora, has_anaphora_candidates
-from app.engine.clarifier import prepare_clarification
+from app.engine.clarifier import _distinctive_words, prepare_clarification
 from app.engine.confidence import run_vote_confidence
 from app.engine.context import determine_resolution_basis, resolve_clarification
 from app.engine.detector import (
@@ -115,24 +115,35 @@ def match_greeting_reply(request: AnalyzeRequest) -> str | None:
 
 
 def _match_cached_clarification(request: AnalyzeRequest) -> str | None:
-    """Resolve an exact option-pill click from cache without an extra LLM round-trip."""
+    """
+    Resolve a clarification answer from cache ONLY when it uniquely matches one
+    interpretation's wording (never assume draft_options and interpretations share order).
+    """
     if request.clarification is None:
         return None
-    answer_norm = request.clarification.answer.strip().lower()
+    answer_raw = request.clarification.answer.strip()
+    answer_norm = answer_raw.lower()
     if not answer_norm:
         return None
+    answer_words = _distinctive_words(answer_raw)
     now = time.monotonic()
     for entry in reversed(list(_ANALYZE_CACHE.values())):
         if (now - entry.created_at) > _CACHE_TTL_SECONDS:
             continue
         if entry.sentence != request.sentence or entry.domain != request.domain or not entry.ambiguous:
             continue
-        for idx, opt in enumerate(entry.draft_options):
-            if opt.strip().lower() == answer_norm and idx < len(entry.interpretations):
-                return entry.interpretations[idx].meaning
         for interp in entry.interpretations:
             if interp.meaning.strip().lower() == answer_norm:
                 return interp.meaning
+        if not answer_words or len(entry.interpretations) < 2:
+            continue
+        scores = [
+            len(answer_words & _distinctive_words(interp.meaning))
+            for interp in entry.interpretations
+        ]
+        best_score = max(scores)
+        if best_score >= 1 and scores.count(best_score) == 1:
+            return entry.interpretations[scores.index(best_score)].meaning
     return None
 
 
