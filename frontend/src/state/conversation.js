@@ -107,7 +107,7 @@ export function useConversation() {
       } else if (result.resolution_basis === 'clarification' && resolvedInterp) {
         assistantText = `Got it: ${resolvedInterp.meaning} (resolved by your answer)`;
       } else if (result.resolution_basis === 'context' && resolvedInterp) {
-        assistantText = `Got it: ${resolvedInterp.meaning} (resolved by context)`;
+        assistantText = `Got it: ${resolvedInterp.meaning} (based on earlier in this chat)`;
       } else if (result.ambiguous && resolvedInterp) {
         assistantText = resolvedInterp.meaning;
       }
@@ -157,7 +157,7 @@ export function useConversation() {
       await runAnalyze(
         {
           sentence,
-          history: history.slice(-6),
+          history: history.slice(-12),
           domain,
           threshold,
         },
@@ -179,7 +179,7 @@ export function useConversation() {
 
       await runAnalyze({
         sentence: lastSentenceRef.current,
-        history: history.slice(-6),
+        history: history.slice(-12),
         domain,
         threshold,
         clarification: { question, answer: trimmed },
@@ -259,7 +259,7 @@ export function useConversation() {
     await runAnalyze(
       {
         sentence: lastSentenceRef.current,
-        history: history.slice(-6),
+        history: history.slice(-12),
         domain,
         threshold,
       },

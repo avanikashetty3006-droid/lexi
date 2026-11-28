@@ -450,6 +450,7 @@ async def analyze_sentence(
                 interpretations=interpretations,
                 draft_question=question,
                 draft_options=options,
+                history=request.history,
                 llm_client=client,
             )
             resolved_id = None
@@ -715,6 +716,7 @@ async def stream_analyze_sentence(
                     interpretations=interpretations,
                     draft_question=question,
                     draft_options=options,
+                    history=request.history,
                     llm_client=client,
                 )
                 resolved_id = None

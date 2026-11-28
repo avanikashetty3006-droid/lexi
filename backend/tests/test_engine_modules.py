@@ -685,3 +685,27 @@ def test_cached_clarification_option_fast_path(monkeypatch):
     assert resolved.resolution_basis == "clarification"
     assert resolved.interpretations[0].meaning == "I saw a flying mammal."
 
+
+def test_clarifier_reminds_user_of_earlier_resolved_meaning():
+    from app.engine.clarifier import enrich_clarification_with_history
+
+    question, options = enrich_clarification_with_history(
+        question="Did you mean a flying mammal or a baseball bat?",
+        options=["Flying mammal", "Baseball bat"],
+        interpretations=[
+            Interpretation(id="i1", meaning="I saw a flying mammal.", probability=0.5),
+            Interpretation(id="i2", meaning="I saw a baseball bat.", probability=0.5),
+        ],
+        history=[
+            HistoryMessage(role="user", content="I saw a bat on the porch."),
+            HistoryMessage(
+                role="assistant",
+                content="Got it: I saw a flying mammal. (resolved by your answer)",
+            ),
+            HistoryMessage(role="user", content="And another bat flew by!"),
+        ],
+    )
+    assert "Earlier in this chat you meant" in question
+    assert "I saw a flying mammal" in question
+    assert options[0] == "Flying mammal (same as earlier)"
+    assert options[1] == "Baseball bat"
