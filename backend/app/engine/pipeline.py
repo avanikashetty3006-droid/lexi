@@ -610,23 +610,61 @@ async def stream_analyze_sentence(
         streamed_text_parts: list[str] = []
 
         if run_anaphora:
+            yield format_sse(
+                "stage",
+                {
+                    "step": "resolving_anaphora",
+                    "message": "Running Resolver A (syntax) & Resolver B (semantics)...",
+                },
+            )
+            resolver_queue: asyncio.Queue[tuple[str, str, list[dict]] | None] = (
+                asyncio.Queue()
+            )
+
+            async def _push_resolver(
+                resolver_id: str, label: str, resolutions: list[dict]
+            ) -> None:
+                await resolver_queue.put((resolver_id, label, resolutions))
+
+            async def _run_parallel_detectors():
+                try:
+                    return await asyncio.gather(
+                        detect_ambiguity(
+                            sentence=request.sentence,
+                            history=request.history,
+                            domain=request.domain,
+                            clarification=request.clarification,
+                            llm_client=client,
+                        ),
+                        detect_anaphora(
+                            sentence=request.sentence,
+                            history=request.history,
+                            llm_client=client,
+                            on_resolver=_push_resolver,
+                        ),
+                    )
+                finally:
+                    await resolver_queue.put(None)
+
+            det_task = asyncio.create_task(_run_parallel_detectors())
+            while True:
+                item = await resolver_queue.get()
+                if item is None:
+                    break
+                resolver_id, label, resolutions = item
+                yield format_sse(
+                    "resolver",
+                    {
+                        "resolver": resolver_id,
+                        "label": label,
+                        "resolutions": resolutions,
+                    },
+                )
+
             (
                 (ambiguous, ambiguities, raw_interps, question, options),
                 (ana_ambiguous, ana_spans, ana_meanings),
-            ) = await asyncio.gather(
-                detect_ambiguity(
-                    sentence=request.sentence,
-                    history=request.history,
-                    domain=request.domain,
-                    clarification=request.clarification,
-                    llm_client=client,
-                ),
-                detect_anaphora(
-                    sentence=request.sentence,
-                    history=request.history,
-                    llm_client=client,
-                ),
-            )
+            ) = await det_task
             ambiguous, ambiguities, raw_interps, question, options = _merge_anaphora(
                 ambiguous=ambiguous,
                 ambiguities=ambiguities,

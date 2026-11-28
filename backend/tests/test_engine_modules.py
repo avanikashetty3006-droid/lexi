@@ -709,3 +709,66 @@ def test_clarifier_reminds_user_of_earlier_resolved_meaning():
     assert "I saw a flying mammal" in question
     assert options[0] == "Flying mammal (same as earlier)"
     assert options[1] == "Baseball bat"
+
+
+def test_stream_anaphora_dual_resolvers(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+    from app.engine.anaphora import AnaphoraResolverOutput, PronounResolution
+    from app.main import app
+
+    class AnaphoraStreamClient:
+        async def call_json(self, *, system_prompt: str, schema_model=None, **kwargs):
+            if schema_model is AnaphoraResolverOutput:
+                if "Resolver A" in system_prompt:
+                    return AnaphoraResolverOutput(
+                        resolutions=[PronounResolution(pronoun="she", antecedent="Alice", confidence=0.6)]
+                    )
+                return AnaphoraResolverOutput(
+                    resolutions=[PronounResolution(pronoun="she", antecedent="Maya", confidence=0.6)]
+                )
+            if "choice" in getattr(schema_model, "model_fields", {}):
+                return schema_model.model_validate({"choice": "unclear", "reason": "ambiguous"})
+            if "clarification_question" in getattr(schema_model, "model_fields", {}) and "ambiguous" not in getattr(schema_model, "model_fields", {}):
+                return schema_model.model_validate(
+                    {"clarification_question": "Did she mean Alice or Maya?", "options": ["Alice", "Maya"]}
+                )
+            return RawDetectionResult(
+                ambiguous=True,
+                ambiguities=[{"type": "anaphoric", "span": "she", "explanation": "Alice or Maya."}],
+                interpretations=[
+                    RawInterpretationItem(id="i1", meaning="Alice failed the exam."),
+                    RawInterpretationItem(id="i2", meaning="Maya failed the exam."),
+                ],
+                clarification_question="Did she mean Alice or Maya?",
+                options=["Alice", "Maya"],
+            )
+
+    fake_settings = type(
+        "FakeSettings",
+        (),
+        {
+            "llm_provider": "gemini",
+            "model_name": "gemini-3.1-flash-lite",
+            "threshold": 0.7,
+            "n_samples": 5,
+            "temperature_detect": 0.0,
+            "temperature_vote": 0.8,
+            "seed": 42,
+            "interactions_log_path": tmp_path / "anaphora_stream.jsonl",
+        },
+    )()
+    monkeypatch.setattr("app.engine.pipeline.default_llm_client", AnaphoraStreamClient())
+    monkeypatch.setattr("app.engine.embeddings.embed_texts", _orthogonal_embed)
+    monkeypatch.setattr("app.engine.pipeline.settings", fake_settings)
+
+    client = TestClient(app)
+    res = client.post("/analyze/stream", json={"sentence": "Alice told Maya that she failed the exam."})
+    assert res.status_code == 200
+    body = res.text
+    assert '"step": "resolving_anaphora"' in body
+    assert "event: resolver" in body
+    assert "Resolver A (syntax)" in body
+    assert "Resolver B (semantics)" in body
+    assert '"antecedent": "Alice"' in body
+    assert '"antecedent": "Maya"' in body
+    assert "event: done" in body

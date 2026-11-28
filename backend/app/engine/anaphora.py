@@ -155,6 +155,7 @@ async def detect_anaphora(
     sentence: str,
     history: list[HistoryMessage],
     llm_client: LLMClient | None = None,
+    on_resolver=None,
 ) -> tuple[bool, list[AmbiguitySpan], list[str]]:
     """
     Run two independent anaphora resolvers on extracted pronouns and candidates.
@@ -184,24 +185,37 @@ async def detect_anaphora(
         ensure_ascii=False,
     )
 
-    res_a, res_b = await asyncio.gather(
-        client.call_json(
-            system_prompt=prompt_a,
-            user_prompt=payload,
-            temperature=0.0,
-            schema_model=AnaphoraResolverOutput,
-            max_tokens=512,
-        ),
-        client.call_json(
-            system_prompt=prompt_b,
-            user_prompt=payload,
-            temperature=0.2,
-            schema_model=AnaphoraResolverOutput,
-            max_tokens=512,
-        ),
-        return_exceptions=True,
-    )
+    async def _run_one(resolver_id: str, label: str, prompt: str, temperature: float):
+        try:
+            res = await client.call_json(
+                system_prompt=prompt,
+                user_prompt=payload,
+                temperature=temperature,
+                schema_model=AnaphoraResolverOutput,
+                max_tokens=512,
+            )
+            return resolver_id, label, res
+        except Exception as exc:
+            return resolver_id, label, exc
 
+    tasks = [
+        asyncio.create_task(_run_one("A", "Resolver A (syntax)", prompt_a, 0.0)),
+        asyncio.create_task(_run_one("B", "Resolver B (semantics)", prompt_b, 0.2)),
+    ]
+    results: dict[str, AnaphoraResolverOutput | Exception] = {}
+    for fut in asyncio.as_completed(tasks):
+        resolver_id, label, res = await fut
+        results[resolver_id] = res
+        if on_resolver is not None:
+            parsed = (
+                [r.model_dump() for r in res.resolutions]
+                if isinstance(res, AnaphoraResolverOutput)
+                else []
+            )
+            await on_resolver(resolver_id, label, parsed)
+
+    res_a = results.get("A")
+    res_b = results.get("B")
     if not isinstance(res_a, AnaphoraResolverOutput) or not isinstance(res_b, AnaphoraResolverOutput):
         return False, [], []
 

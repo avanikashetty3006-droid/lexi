@@ -49,6 +49,9 @@ function formatStageStep(data) {
   if (data.step === 'detecting') {
     return data.message || 'Checking ambiguity...';
   }
+  if (data.step === 'resolving_anaphora') {
+    return data.message || 'Running Resolver A (syntax) & Resolver B (semantics)...';
+  }
   if (data.step === 'detected') {
     return data.ambiguous
       ? 'Ambiguity found — checking confidence...'
@@ -131,6 +134,15 @@ export function useConversation() {
             const label = formatStageStep(data);
             if (label) {
               setLoadingStep(label);
+            }
+          },
+          onResolver: (data) => {
+            const first = data?.resolutions?.[0];
+            const detail = first
+              ? `${first.pronoun} -> ${first.antecedent}`
+              : 'done';
+            if (data?.label) {
+              setLoadingStep(`${data.label}: ${detail}`);
             }
           },
           onVote: (data) => {

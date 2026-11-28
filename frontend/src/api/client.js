@@ -39,7 +39,10 @@ export async function analyze(payload) {
   return res.json();
 }
 
-export async function analyzeStream(payload, { onStage, onVote, onToken } = {}) {
+export async function analyzeStream(
+  payload,
+  { onStage, onResolver, onVote, onToken } = {}
+) {
   if (USE_MOCK) {
     onStage?.({ step: 'detecting', message: 'Checking ambiguity...' });
     const mockRes = await mockAnalyze(payload);
@@ -92,6 +95,8 @@ export async function analyzeStream(payload, { onStage, onVote, onToken } = {}) 
 
     if (eventType === 'stage') {
       onStage?.(data);
+    } else if (eventType === 'resolver') {
+      onResolver?.(data);
     } else if (eventType === 'vote') {
       onVote?.(data);
     } else if (eventType === 'token') {
