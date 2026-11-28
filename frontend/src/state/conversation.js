@@ -1,10 +1,48 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { analyzeStream, baseline, sendEvent } from '../api/client';
 
 const SESSION_ID =
   typeof crypto !== 'undefined' && crypto.randomUUID
     ? crypto.randomUUID()
     : String(Date.now());
+
+const STORAGE_KEY = 'lexi_conversations_v1';
+const ACTIVE_KEY = 'lexi_active_conv_v1';
+const MAX_SAVED_CONVERSATIONS = 25;
+
+function makeConversationId() {
+  return `conv-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function loadSavedConversations() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function loadInitialActive(saved) {
+  try {
+    const storedId = localStorage.getItem(ACTIVE_KEY);
+    if (storedId) {
+      const found = saved.find((c) => c.id === storedId);
+      if (found) return found;
+    }
+  } catch {
+    // Ignore storage errors in restricted environments
+  }
+  return null;
+}
+
+function deriveTitle(msgs) {
+  const firstUser = msgs.find((m) => m.role === 'user' && m.content?.trim());
+  if (!firstUser) return 'New conversation';
+  const text = firstUser.content.trim();
+  return text.length > 48 ? `${text.slice(0, 48)}...` : text;
+}
 
 function formatStageStep(data) {
   if (!data?.step) return '';
@@ -25,21 +63,56 @@ function formatStageStep(data) {
 }
 
 export function useConversation() {
-  const [messages, setMessages] = useState([]);
-  const [history, setHistory] = useState([]);
-  const [threshold, setThreshold] = useState(0.7);
-  const [domain, setDomain] = useState('general');
-  const [latestResult, setLatestResult] = useState(null);
-  const [baselineResult, setBaselineResult] = useState(null);
+  const initialRef = useRef(null);
+  if (initialRef.current === null) {
+    const saved = loadSavedConversations();
+    const active = loadInitialActive(saved);
+    initialRef.current = {
+      saved,
+      active,
+      activeId: active?.id || makeConversationId(),
+    };
+  }
+
+  const [conversations, setConversations] = useState(
+    () => initialRef.current.saved
+  );
+  const [activeConversationId, setActiveConversationId] = useState(
+    () => initialRef.current.activeId
+  );
+  const [messages, setMessages] = useState(
+    () => initialRef.current.active?.messages || []
+  );
+  const [history, setHistory] = useState(
+    () => initialRef.current.active?.history || []
+  );
+  const [threshold, setThreshold] = useState(
+    () => initialRef.current.active?.threshold ?? 0.7
+  );
+  const [domain, setDomain] = useState(
+    () => initialRef.current.active?.domain || 'general'
+  );
+  const [latestResult, setLatestResult] = useState(
+    () => initialRef.current.active?.latestResult || null
+  );
+  const [baselineResult, setBaselineResult] = useState(
+    () => initialRef.current.active?.baselineResult || null
+  );
   const [compareMode, setCompareMode] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState('');
   const [error, setError] = useState(null);
-  const [overriddenId, setOverriddenId] = useState(null);
-  const [feedbackByMessage, setFeedbackByMessage] = useState({});
+  const [overriddenId, setOverriddenId] = useState(
+    () => initialRef.current.active?.overriddenId || null
+  );
+  const [feedbackByMessage, setFeedbackByMessage] = useState(
+    () => initialRef.current.active?.feedbackByMessage || {}
+  );
 
   const lastPayloadRef = useRef(null);
-  const lastSentenceRef = useRef('');
+  const lastSentenceRef = useRef(
+    initialRef.current.active?.latestResult?.sentence || ''
+  );
 
   const runAnalyze = useCallback(async (payload, { fetchBaseline = false } = {}) => {
     lastPayloadRef.current = payload;
@@ -267,10 +340,60 @@ export function useConversation() {
     );
   }, [compareMode, domain, history, loading, runAnalyze, threshold]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(ACTIVE_KEY, activeConversationId);
+    } catch {
+      // Ignore storage quota or privacy-mode errors
+    }
+  }, [activeConversationId]);
+
+  useEffect(() => {
+    if (loading || messages.length === 0) return;
+    const entry = {
+      id: activeConversationId,
+      title: deriveTitle(messages),
+      updatedAt: Date.now(),
+      messages,
+      history,
+      latestResult,
+      baselineResult,
+      overriddenId,
+      feedbackByMessage,
+      domain,
+      threshold,
+    };
+    setConversations((prev) => {
+      const next = [
+        entry,
+        ...prev.filter((c) => c.id !== activeConversationId),
+      ].slice(0, MAX_SAVED_CONVERSATIONS);
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // Ignore storage quota or privacy-mode errors
+      }
+      return next;
+    });
+  }, [
+    activeConversationId,
+    baselineResult,
+    domain,
+    feedbackByMessage,
+    history,
+    latestResult,
+    loading,
+    messages,
+    overriddenId,
+    threshold,
+  ]);
+
   const clearConversation = useCallback(() => {
+    if (loading) return;
     setLoadingStep('');
     lastPayloadRef.current = null;
     lastSentenceRef.current = '';
+    setActiveConversationId(makeConversationId());
     setMessages([]);
     setHistory([]);
     setLatestResult(null);
@@ -279,9 +402,66 @@ export function useConversation() {
     setFeedbackByMessage({});
     setError(null);
     setLoading(false);
-  }, []);
+  }, [loading]);
+
+  const selectConversation = useCallback(
+    (convId) => {
+      if (loading) return;
+      const target = conversations.find((c) => c.id === convId);
+      if (!target) return;
+      setLoadingStep('');
+      lastPayloadRef.current = null;
+      const userMsgs = (target.messages || []).filter((m) => m.role === 'user');
+      lastSentenceRef.current =
+        target.latestResult?.sentence ||
+        userMsgs[userMsgs.length - 1]?.content ||
+        '';
+      setActiveConversationId(target.id);
+      setMessages(target.messages || []);
+      setHistory(target.history || []);
+      setLatestResult(target.latestResult || null);
+      setBaselineResult(target.baselineResult || null);
+      setOverriddenId(target.overriddenId || null);
+      setFeedbackByMessage(target.feedbackByMessage || {});
+      setDomain(target.domain || 'general');
+      setThreshold(target.threshold ?? 0.7);
+      setError(null);
+    },
+    [conversations, loading]
+  );
+
+  const deleteConversation = useCallback(
+    (convId) => {
+      setConversations((prev) => {
+        const next = prev.filter((c) => c.id !== convId);
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        } catch {
+          // Ignore storage quota or privacy-mode errors
+        }
+        return next;
+      });
+      if (convId === activeConversationId) {
+        setLoadingStep('');
+        lastPayloadRef.current = null;
+        lastSentenceRef.current = '';
+        setActiveConversationId(makeConversationId());
+        setMessages([]);
+        setHistory([]);
+        setLatestResult(null);
+        setBaselineResult(null);
+        setOverriddenId(null);
+        setFeedbackByMessage({});
+        setError(null);
+        setLoading(false);
+      }
+    },
+    [activeConversationId]
+  );
 
   return {
+    conversations,
+    activeConversationId,
     messages,
     history,
     threshold,
@@ -304,5 +484,7 @@ export function useConversation() {
     retry,
     reanalyzeWithThreshold,
     clearConversation,
+    selectConversation,
+    deleteConversation,
   };
 }

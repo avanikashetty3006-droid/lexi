@@ -7,11 +7,13 @@ import ChatColumn from './components/ChatColumn';
 import AnalysisPanel from './components/AnalysisPanel';
 import CompareView from './components/CompareView';
 import AboutModal from './components/AboutModal';
+import HistoryModal from './components/HistoryModal';
 
 function MainApp() {
   const { user, signOut } = useAuth();
   const conv = useConversation();
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   return (
     <div className="min-h-screen bg-ink text-silver flex flex-col">
@@ -23,6 +25,8 @@ function MainApp() {
         compareMode={conv.compareMode}
         onToggleCompare={conv.toggleCompareMode}
         onOpenAbout={() => setAboutOpen(true)}
+        onOpenHistory={() => setHistoryOpen(true)}
+        historyCount={conv.conversations.length}
         onNewConversation={conv.clearConversation}
         user={user}
         onSignOut={signOut}
@@ -67,6 +71,15 @@ function MainApp() {
       </main>
 
       <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} />
+      <HistoryModal
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        conversations={conv.conversations}
+        activeId={conv.activeConversationId}
+        onSelect={conv.selectConversation}
+        onDelete={conv.deleteConversation}
+        onNewConversation={conv.clearConversation}
+      />
     </div>
   );
 }

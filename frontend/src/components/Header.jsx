@@ -9,6 +9,8 @@ export default function Header({
   compareMode,
   onToggleCompare,
   onOpenAbout,
+  onOpenHistory,
+  historyCount = 0,
   onNewConversation,
   user,
   onSignOut,
@@ -64,6 +66,14 @@ export default function Header({
             className="px-3 py-1.5 rounded-xl text-xs font-medium bg-panel border border-line text-silver hover:text-crisp focus:outline-none focus:ring-2 focus:ring-[#6C5CE7]"
           >
             How it works
+          </button>
+
+          <button
+            type="button"
+            onClick={onOpenHistory}
+            className="px-3 py-1.5 rounded-xl text-xs font-medium bg-panel border border-line text-silver hover:text-crisp focus:outline-none focus:ring-2 focus:ring-[#6C5CE7]"
+          >
+            History{historyCount > 0 ? ` (${historyCount})` : ''}
           </button>
 
           <button
