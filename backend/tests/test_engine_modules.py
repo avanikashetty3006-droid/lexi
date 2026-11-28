@@ -592,3 +592,96 @@ def test_call_json_gemini_rate_limit_fallback_to_groq_reasoning():
     assert captured_backup_kwargs[0]["model"] == "openai/gpt-oss-20b"
     assert captured_backup_kwargs[0]["reasoning_effort"] == "low"
     assert captured_backup_kwargs[0]["max_tokens"] >= 1024
+
+
+def test_extended_greeting_fast_path_zero_llm_calls(monkeypatch):
+    from app.engine.llm import LLMClient
+
+    monkeypatch.setattr("app.engine.embeddings.embed_texts", _orthogonal_embed)
+
+    class FailIfCalledLLM(LLMClient):
+        async def _request_once(self, **kwargs) -> str:
+            raise AssertionError("Greeting fast-path should never call LLM")
+
+    client = FailIfCalledLLM()
+    for greeting in ("heyy", "hiiii!", "okay", "Good Morning"):
+        res = asyncio.run(
+            analyze_sentence(
+                AnalyzeRequest(sentence=greeting),
+                llm_client=client,
+                embed_fn=_orthogonal_embed,
+                enable_logging=False,
+            )
+        )
+        assert res.ambiguous is False
+        assert res.confidence == 1.0
+        assert res.needs_clarification is False
+
+
+def test_cached_clarification_option_fast_path(monkeypatch):
+    from app.engine.llm import LLMClient
+    from app.engine.pipeline import clear_analyze_cache
+
+    clear_analyze_cache()
+    monkeypatch.setattr("app.engine.embeddings.embed_texts", _orthogonal_embed)
+
+    class SpyClient(LLMClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        async def _request_once(self, *, system_prompt: str, user_prompt: str, **kwargs) -> str:
+            self.calls += 1
+            if "semantic evaluator" in system_prompt:
+                return json.dumps({"choice": "unclear", "reason": "ambiguous"})
+            if "clarification" in system_prompt.lower() and "resolved_meaning" in system_prompt.lower():
+                raise AssertionError("Exact option click should resolve from cache without LLM")
+            return json.dumps(
+                {
+                    "ambiguous": True,
+                    "ambiguities": [
+                        {"type": "lexical", "span": "bat", "explanation": "Animal or sports bat."}
+                    ],
+                    "interpretations": [
+                        {"id": "i1", "meaning": "I saw a flying mammal."},
+                        {"id": "i2", "meaning": "I saw a sports bat."},
+                    ],
+                    "clarification_question": "Animal or sports equipment?",
+                    "options": ["Animal bat", "Sports bat"],
+                }
+            )
+
+    client = SpyClient()
+    first = asyncio.run(
+        analyze_sentence(
+            AnalyzeRequest(sentence="I saw a bat."),
+            llm_client=client,
+            enable_logging=False,
+        )
+    )
+    assert first.needs_clarification is True
+    calls_before_click = client.calls
+
+    resolved = asyncio.run(
+        analyze_sentence(
+            AnalyzeRequest(
+                sentence="I saw a bat.",
+                history=[
+                    HistoryMessage(role="user", content="I saw a bat."),
+                    HistoryMessage(role="assistant", content="Animal or sports equipment?"),
+                ],
+                clarification=ClarificationInput(
+                    question="Animal or sports equipment?",
+                    answer="Animal bat",
+                ),
+            ),
+            llm_client=client,
+            enable_logging=False,
+        )
+    )
+    assert client.calls == calls_before_click
+    assert resolved.ambiguous is False
+    assert resolved.confidence == 1.0
+    assert resolved.resolution_basis == "clarification"
+    assert resolved.interpretations[0].meaning == "I saw a flying mammal."
+

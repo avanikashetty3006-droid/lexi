@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from app.config import settings
 from app.engine.baseline import run_baseline
 from app.engine.embeddings import embed_texts
+from app.engine.llm import default_llm_client
 from app.engine.pipeline import analyze_sentence, stream_analyze_sentence
 from app.feedback import router as feedback_router
 from app.schemas import AnalyzeRequest, AnalyzeResponse, BaselineRequest, BaselineResponse
@@ -17,9 +18,14 @@ from app.schemas import AnalyzeRequest, AnalyzeResponse, BaselineRequest, Baseli
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Pre-warm local SentenceTransformer embeddings on server startup."""
+    """Pre-warm local SentenceTransformer embeddings and HTTP client pool on startup."""
     if os.getenv("LEXI_SKIP_WARMUP") != "1":
         embed_texts(["Lexi embedding warmup"])
+        for use_backup in (False, True):
+            try:
+                default_llm_client._get_client(use_backup=use_backup)
+            except RuntimeError:
+                pass
     yield
 
 

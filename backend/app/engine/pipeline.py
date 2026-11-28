@@ -34,20 +34,26 @@ _CACHE_TTL_SECONDS = 120.0
 _CACHE_MAX_ENTRIES = 64
 
 _GREETING_PUNCT_RE = re.compile(r"[!.,?]+$")
+_GREETING_REPEAT_RE = re.compile(r"([a-z])\1{2,}$")
 _GREETING_GROUPS: list[tuple[set[str], str]] = [
     (
         {
             "hi",
-            "hey",
-            "hello",
             "hii",
+            "hy",
+            "hyy",
+            "hey",
+            "heyy",
             "heya",
+            "hello",
+            "helloo",
             "hi there",
             "hello there",
             "hey there",
             "good morning",
             "good afternoon",
             "good evening",
+            "good night",
             "gm",
         },
         "Hi there! How can I help you today?",
@@ -57,11 +63,15 @@ _GREETING_GROUPS: list[tuple[set[str], str]] = [
         "I'm doing great, thanks for asking! What would you like to check or chat about?",
     ),
     (
-        {"thanks", "thank you", "thx", "ty", "thank u"},
+        {"thanks", "thank you", "thx", "ty", "thank u", "thankss"},
         "You're welcome! Let me know if you need anything else.",
     ),
     (
-        {"bye", "goodbye", "see you", "cya"},
+        {"ok", "okay", "cool", "great", "got it"},
+        "Got it! Send any sentence or question whenever you're ready.",
+    ),
+    (
+        {"bye", "byee", "goodbye", "see you", "cya"},
         "Goodbye! Feel free to come back anytime.",
     ),
 ]
@@ -70,6 +80,8 @@ _GREETING_GROUPS: list[tuple[set[str], str]] = [
 @dataclass
 class _CachedAnalysis:
     created_at: float
+    sentence: str
+    domain: str
     ambiguous: bool
     confidence: float
     ambiguities: list[AmbiguitySpan]
@@ -95,9 +107,55 @@ def match_greeting_reply(request: AnalyzeRequest) -> str | None:
     if request.clarification is not None:
         return None
     normalized = _GREETING_PUNCT_RE.sub("", request.sentence.strip().lower()).strip()
+    collapsed = _GREETING_REPEAT_RE.sub(r"\1", normalized)
     for phrases, reply in _GREETING_GROUPS:
-        if normalized in phrases:
+        if normalized in phrases or collapsed in phrases:
             return reply
+    return None
+
+
+def _match_cached_clarification(request: AnalyzeRequest) -> str | None:
+    """Resolve an exact option-pill click from cache without an extra LLM round-trip."""
+    if request.clarification is None:
+        return None
+    answer_norm = request.clarification.answer.strip().lower()
+    if not answer_norm:
+        return None
+    now = time.monotonic()
+    for entry in reversed(list(_ANALYZE_CACHE.values())):
+        if (now - entry.created_at) > _CACHE_TTL_SECONDS:
+            continue
+        if entry.sentence != request.sentence or entry.domain != request.domain or not entry.ambiguous:
+            continue
+        for idx, opt in enumerate(entry.draft_options):
+            if opt.strip().lower() == answer_norm and idx < len(entry.interpretations):
+                return entry.interpretations[idx].meaning
+        for interp in entry.interpretations:
+            if interp.meaning.strip().lower() == answer_norm:
+                return interp.meaning
+    return None
+
+
+async def _resolve_clarification_meaning(
+    request: AnalyzeRequest,
+    client: LLMClient,
+    cache_allowed: bool,
+) -> str | None:
+    """Resolve user clarification via cached option match or fallback LLM call."""
+    if request.clarification is None:
+        return None
+    if cache_allowed:
+        cached_meaning = _match_cached_clarification(request)
+        if cached_meaning:
+            return cached_meaning
+    ctx_res = await resolve_clarification(
+        sentence=request.sentence,
+        history=request.history,
+        clarification=request.clarification,
+        llm_client=client,
+    )
+    if ctx_res.resolved and ctx_res.resolved_meaning.strip():
+        return ctx_res.resolved_meaning.strip()
     return None
 
 
@@ -311,16 +369,13 @@ async def analyze_sentence(
 
     # 1. Explicit clarification resolution path
     if request.clarification is not None:
-        ctx_res = await resolve_clarification(
-            sentence=request.sentence,
-            history=request.history,
-            clarification=request.clarification,
-            llm_client=client,
+        matched_meaning = await _resolve_clarification_meaning(
+            request, client, cache_allowed
         )
-        if ctx_res.resolved and ctx_res.resolved_meaning.strip():
+        if matched_meaning:
             response = _build_clean_response(
                 request=request,
-                meaning=ctx_res.resolved_meaning.strip(),
+                meaning=matched_meaning,
                 threshold_used=threshold_used,
                 started=started,
                 resolution_basis="clarification",
@@ -416,6 +471,8 @@ async def analyze_sentence(
             cache_key,
             _CachedAnalysis(
                 created_at=time.monotonic(),
+                sentence=request.sentence,
+                domain=request.domain,
                 ambiguous=ambiguous,
                 confidence=confidence,
                 ambiguities=ambiguities,
@@ -529,16 +586,13 @@ async def stream_analyze_sentence(
                 return
 
         if request.clarification is not None:
-            ctx_res = await resolve_clarification(
-                sentence=request.sentence,
-                history=request.history,
-                clarification=request.clarification,
-                llm_client=client,
+            matched_meaning = await _resolve_clarification_meaning(
+                request, client, cache_allowed
             )
-            if ctx_res.resolved and ctx_res.resolved_meaning.strip():
+            if matched_meaning:
                 response = _build_clean_response(
                     request=request,
-                    meaning=ctx_res.resolved_meaning.strip(),
+                    meaning=matched_meaning,
                     threshold_used=threshold_used,
                     started=started,
                     resolution_basis="clarification",
@@ -682,6 +736,8 @@ async def stream_analyze_sentence(
                 cache_key,
                 _CachedAnalysis(
                     created_at=time.monotonic(),
+                    sentence=request.sentence,
+                    domain=request.domain,
                     ambiguous=ambiguous,
                     confidence=confidence,
                     ambiguities=ambiguities,

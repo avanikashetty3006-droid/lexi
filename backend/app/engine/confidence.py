@@ -72,8 +72,6 @@ async def run_vote_confidence(
     )
 
     async def _single_vote(idx: int):
-        if idx > 0 and isinstance(client, LLMClient):
-            await asyncio.sleep(0.02 * idx)
         kwargs = {
             "system_prompt": system_prompt,
             "user_prompt": user_prompt,
